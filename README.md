@@ -16,7 +16,7 @@ PDF 문서에서 텍스트, 테이블, 이미지를 추출하고 AWS Bedrock 멀
 ## 프로젝트 구조
 
 ```
-parser/
+pdf-parser/
 ├── run.py                        # CLI 진입점 (단일 PDF / 폴더 일괄 처리)
 ├── src/
 │   ├── __init__.py
@@ -27,13 +27,14 @@ parser/
 ├── pdf_parser_docling.ipynb      # 인터랙티브 노트북 (단계별 실행/시각화)
 ├── sample.pdf                    # 샘플 PDF
 ├── pdfs/                         # 일괄 처리용 PDF 폴더
+├── pyproject.toml                # uv 프로젝트 설정
 └── README.md
 ```
 
 ## 설치
 
 ```bash
-pip install docling pandas pillow tabulate boto3 opencv-python
+uv sync
 ```
 
 > **Apple Silicon**: DocumentFigureClassifier는 EfficientNet-B0 기반으로 CPU에서도 빠르게 동작합니다.
@@ -58,28 +59,28 @@ export AWS_DEFAULT_REGION=us-east-1
 
 ```bash
 # 단일 PDF 파싱
-python run.py sample.pdf -o output
+uv run python run.py sample.pdf -o output
 
 # 폴더 내 PDF 일괄 병렬 처리
-python run.py ./pdfs/ -o output --workers 4
+uv run python run.py ./pdfs/ -o output --workers 4
 
 # LLM 요약 없이 Docling 추출만
-python run.py sample.pdf -o output --no-summary
+uv run python run.py sample.pdf -o output --no-summary
 
 # 빠른 테이블 모드 (단순 테이블에 적합)
-python run.py sample.pdf -o output --table-mode fast
+uv run python run.py sample.pdf -o output --table-mode fast
 
 # Bedrock 모델 변경
-python run.py sample.pdf -o output --model-id us.anthropic.claude-3-5-sonnet-20241022-v2:0
+uv run python run.py sample.pdf -o output --model-id us.anthropic.claude-3-5-sonnet-20241022-v2:0
 
 # 상세 로그 출력
-python run.py sample.pdf -o output -v
+uv run python run.py sample.pdf -o output -v
 ```
 
 ### Jupyter Notebook
 
 ```bash
-jupyter notebook pdf_parser_docling.ipynb
+uv run jupyter notebook pdf_parser_docling.ipynb
 ```
 
 노트북에서 단계별로 실행하며 중간 결과를 시각화할 수 있습니다.
