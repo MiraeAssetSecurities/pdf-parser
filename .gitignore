@@ -1,0 +1,6 @@
+.env
+output/
+pdfs/
+.ipynb_checkpoints/
+__pycache__/
+downloads/
