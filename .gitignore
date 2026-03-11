@@ -4,3 +4,8 @@ pdfs/
 .ipynb_checkpoints/
 __pycache__/
 downloads/
+downloads_ocr/
+temp_bbox/
+temp_img.jpg
+*.pyc
+.DS_Store

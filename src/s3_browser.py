@@ -133,10 +133,11 @@ class S3Browser:
                 folders = result["folders"]
                 pdfs = result["pdfs"]
 
-                # Display folders
+                # Display folders (최대 30개)
                 if folders:
                     folder_buttons = []
-                    for folder in folders:
+                    display_folders = folders[:30]
+                    for folder in display_folders:
                         btn = widgets.Button(
                             description=f"📁 {folder}",
                             button_style="",
@@ -145,16 +146,25 @@ class S3Browser:
                         btn.folder_name = folder
                         btn.on_click(self._on_folder_clicked)
                         folder_buttons.append(btn)
+
+                    # 더 많은 폴더가 있으면 안내 메시지 추가
+                    if len(folders) > 30:
+                        info = widgets.HTML(
+                            value=f"<i>... 외 {len(folders) - 30}개 폴더 더 있음 (상위 30개만 표시)</i>"
+                        )
+                        folder_buttons.append(info)
+
                     self.folders_box.children = folder_buttons
                 else:
                     self.folders_box.children = [
                         widgets.HTML(value="<i>No folders</i>")
                     ]
 
-                # Display PDFs
+                # Display PDFs (최대 30개)
                 if pdfs:
                     pdf_buttons = []
-                    for pdf in pdfs:
+                    display_pdfs = pdfs[:30]
+                    for pdf in display_pdfs:
                         btn = widgets.Button(
                             description=f"📄 {pdf}",
                             button_style="success",
@@ -163,6 +173,14 @@ class S3Browser:
                         btn.pdf_name = pdf
                         btn.on_click(self._on_pdf_clicked)
                         pdf_buttons.append(btn)
+
+                    # 더 많은 PDF가 있으면 안내 메시지 추가
+                    if len(pdfs) > 30:
+                        info = widgets.HTML(
+                            value=f"<i>... 외 {len(pdfs) - 30}개 PDF 더 있음 (상위 30개만 표시)</i>"
+                        )
+                        pdf_buttons.append(info)
+
                     self.pdfs_box.children = pdf_buttons
                 else:
                     self.pdfs_box.children = [widgets.HTML(value="<i>No PDF files</i>")]

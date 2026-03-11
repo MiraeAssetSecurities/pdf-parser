@@ -4,7 +4,8 @@ Usage:
     uv run uvicorn api:app --host 0.0.0.0 --port 3000
 
 Endpoints:
-    POST /process - Process a single PDF from S3
+    POST /process - Process a single PDF from S3 (full pipeline)
+    POST /ocr - OCR only with bbox visualization
     GET /health - Health check
 """
 
@@ -24,6 +25,7 @@ from src.converter import DoclingConverter
 from src.s3_handler import S3Handler
 from src.summarizer import BedrockSummarizer
 from src.markdown_builder import MarkdownBuilder
+from src.utils import generate_bbox_images
 
 # Setup logging
 logging.basicConfig(
@@ -76,6 +78,171 @@ class ProcessResponse(BaseModel):
     uploadedFiles: Optional[list[str]] = None
     stats: Optional[dict] = None
     elapsedSeconds: Optional[float] = None
+
+
+class OCRRequest(BaseModel):
+    """Request model for OCR-only processing."""
+
+    inputPath: str = Field(
+        ...,
+        description="S3 URI of input PDF (e.g., s3://bucket/input/sample.pdf)",
+        example="s3://my-bucket/input/sample.pdf",
+    )
+    outputPath: str = Field(
+        ...,
+        description="S3 URI of output base path (e.g., s3://bucket/output/)",
+        example="s3://my-bucket/output/",
+    )
+    tableMode: Optional[str] = Field(
+        default="accurate",
+        description="Table extraction mode: 'accurate' or 'fast'",
+    )
+    generateBboxImages: Optional[bool] = Field(
+        default=True,
+        description="Generate bounding box visualization images",
+    )
+
+
+class OCRResponse(BaseModel):
+    """Response model for OCR processing."""
+
+    success: bool
+    message: str
+    textMarkdownUri: Optional[str] = None
+    bboxImagesUris: Optional[list[str]] = None
+    uploadedFiles: Optional[list[str]] = None
+    stats: Optional[dict] = None
+    elapsedSeconds: Optional[float] = None
+
+
+@app.post("/ocr", response_model=OCRResponse)
+async def ocr_pdf(request: OCRRequest):
+    """OCR-only processing: Extract text and visualize bounding boxes.
+
+    Args:
+        request: OCRRequest with inputPath and outputPath
+
+    Returns:
+        OCRResponse with OCR results and bbox images
+    """
+    # Validate S3 URIs
+    if not request.inputPath.startswith("s3://"):
+        raise HTTPException(
+            status_code=400,
+            detail="inputPath must be S3 URI starting with s3://",
+        )
+    if not request.outputPath.startswith("s3://"):
+        raise HTTPException(
+            status_code=400,
+            detail="outputPath must be S3 URI starting with s3://",
+        )
+    if not request.inputPath.lower().endswith(".pdf"):
+        raise HTTPException(
+            status_code=400,
+            detail="inputPath must be a PDF file (ending with .pdf)",
+        )
+    if request.tableMode not in ["accurate", "fast"]:
+        raise HTTPException(
+            status_code=400,
+            detail="tableMode must be 'accurate' or 'fast'",
+        )
+
+    # Create temp directory
+    temp_dir = Path(tempfile.mkdtemp(prefix="pdf-parser-ocr-"))
+
+    try:
+        t0 = time.time()
+        logger.info("🔍 OCR request: %s → %s", request.inputPath, request.outputPath)
+
+        # Initialize handlers
+        s3 = S3Handler()
+
+        # Extract PDF name
+        pdf_name = Path(request.inputPath).name
+        pdf_stem = Path(request.inputPath).stem
+
+        # Local paths
+        local_pdf = temp_dir / pdf_name
+        local_output = temp_dir / pdf_stem
+        local_output.mkdir(parents=True, exist_ok=True)
+
+        # 1) Download PDF from S3
+        logger.info("📥 [%s] Downloading from S3", pdf_name)
+        s3.download_pdf(request.inputPath, local_pdf)
+
+        # 2) Docling conversion (OCR only)
+        logger.info("📄 [%s] Docling OCR conversion started", pdf_name)
+        converter = DoclingConverter(table_mode=request.tableMode)
+        parsed = converter.convert(local_pdf)
+        n_pages = len(parsed.doc.pages)
+        n_figs = len(parsed.get_figures())
+        n_tbls = len(parsed.get_tables())
+        logger.info(
+            "✅ [%s] OCR done — %d pages, %d figures, %d tables",
+            pdf_name, n_pages, n_figs, n_tbls,
+        )
+
+        # 3) Save text markdown
+        logger.info("💾 [%s] Saving text markdown", pdf_name)
+        text_path = local_output / f"{parsed.doc_name}_text.md"
+        text_path.write_text(parsed.doc.export_to_markdown(), encoding="utf-8")
+
+        # 4) Generate bbox visualization images
+        bbox_uris = []
+        if request.generateBboxImages:
+            logger.info("🖼️  [%s] Generating bbox visualization images", pdf_name)
+            bbox_dir = local_output / "bbox"
+            bbox_dir.mkdir(parents=True, exist_ok=True)
+
+            bbox_images = generate_bbox_images(parsed, bbox_dir)
+
+            # Save bbox images locally
+            for page_no, jpg_bytes in bbox_images.items():
+                bbox_path = bbox_dir / f"{parsed.doc_name}_page{page_no:03d}_bbox.jpg"
+                bbox_path.write_bytes(jpg_bytes)
+
+            logger.info("✅ [%s] Generated %d bbox images", pdf_name, len(bbox_images))
+
+        # 5) Upload to S3
+        logger.info("📤 [%s] Uploading OCR results to S3", pdf_name)
+        s3_output_uri = request.outputPath.rstrip("/") + f"/{pdf_stem}/"
+        uploaded_uris = s3.upload_directory(local_output, s3_output_uri)
+
+        text_md_s3_uri = s3_output_uri + f"{parsed.doc_name}_text.md"
+
+        # Filter bbox image URIs
+        if request.generateBboxImages:
+            bbox_uris = [uri for uri in uploaded_uris if "/bbox/" in uri]
+
+        elapsed = time.time() - t0
+        logger.info("🎉 [%s] OCR done → %s (%.1fs total)", pdf_name, text_md_s3_uri, elapsed)
+
+        return OCRResponse(
+            success=True,
+            message=f"Successfully OCR processed {pdf_name}",
+            textMarkdownUri=text_md_s3_uri,
+            bboxImagesUris=bbox_uris if bbox_uris else None,
+            uploadedFiles=uploaded_uris,
+            stats={
+                "pages": n_pages,
+                "figures": n_figs,
+                "tables": n_tbls,
+                "bboxImages": len(bbox_uris) if bbox_uris else 0,
+            },
+            elapsedSeconds=round(elapsed, 2),
+        )
+
+    except Exception as e:
+        logger.error("❌ OCR processing failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"OCR processing failed: {str(e)}",
+        )
+
+    finally:
+        # Cleanup temp files
+        logger.info("🧹 Cleaning up temp files")
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 @app.get("/health")

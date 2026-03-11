@@ -138,6 +138,11 @@ uv run jupyter lab --ip=0.0.0.0 --port=8000 --no-browser
     - 폴더 클릭 네비게이션
     - PDF 선택 및 자동 처리
     - 실시간 경로 편집
+- **ocr_visualizer.ipynb**: OCR 전용 시각화 도구
+  - S3 브라우저로 PDF 선택
+  - OCR API 호출 및 결과 시각화
+  - 바운딩 박스 이미지 인라인 표시
+  - 추출 텍스트 마크다운 미리보기
 
 ### Python 코드에서 직접 사용
 
@@ -208,6 +213,41 @@ browser = create_s3_browser(
     initial_path="s3://my-bucket/",
     on_select=on_select
 )
+```
+
+**FastAPI 클라이언트:**
+```python
+import requests
+
+# 전체 파이프라인 (LLM 요약 포함)
+response = requests.post(
+    "http://localhost:3000/process",
+    json={
+        "inputPath": "s3://my-bucket/input/sample.pdf",
+        "outputPath": "s3://my-bucket/output/",
+        "modelId": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "noSummary": False,
+        "tableMode": "accurate",
+    }
+)
+
+result = response.json()
+print(f"Final markdown: {result['finalMarkdownUri']}")
+
+# OCR 전용 (바운딩 박스 시각화 포함)
+response = requests.post(
+    "http://localhost:3000/ocr",
+    json={
+        "inputPath": "s3://my-bucket/input/sample.pdf",
+        "outputPath": "s3://my-bucket/output/",
+        "tableMode": "accurate",
+        "generateBboxImages": True,
+    }
+)
+
+result = response.json()
+print(f"Text markdown: {result['textMarkdownUri']}")
+print(f"Bbox images: {len(result['bboxImagesUris'])} pages")
 ```
 
 ## 출력 구조

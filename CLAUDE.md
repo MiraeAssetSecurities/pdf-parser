@@ -72,7 +72,7 @@ uv run uvicorn api:app --host 0.0.0.0 --port 3000
 # Access API docs at http://localhost:3000/docs
 # Health check: http://localhost:3000/health
 
-# Example API request using curl
+# Full pipeline with AI summaries
 curl -X POST http://localhost:3000/process \
   -H "Content-Type: application/json" \
   -d '{
@@ -81,6 +81,16 @@ curl -X POST http://localhost:3000/process \
     "modelId": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     "noSummary": false,
     "tableMode": "accurate"
+  }'
+
+# OCR only with bbox visualization
+curl -X POST http://localhost:3000/ocr \
+  -H "Content-Type: application/json" \
+  -d '{
+    "inputPath": "s3://my-bucket/input/sample.pdf",
+    "outputPath": "s3://my-bucket/output/",
+    "tableMode": "accurate",
+    "generateBboxImages": true
   }'
 ```
 
@@ -119,7 +129,8 @@ uv run jupyter lab --ip=0.0.0.0 --port=8000 --no-browser
 **3. FastAPI Mode (api.py)**
 - RESTful API server with OpenAPI documentation (Swagger UI)
 - Endpoints:
-  - `POST /process`: Process single PDF from S3
+  - `POST /process`: Full pipeline (OCR + LLM summaries + markdown assembly)
+  - `POST /ocr`: OCR-only processing with bbox visualization
   - `GET /health`: Health check endpoint
 - Request format: JSON with `inputPath`, `outputPath`, optional parameters
 - Response: JSON with processing results, stats, and S3 URIs
@@ -131,6 +142,7 @@ uv run jupyter lab --ip=0.0.0.0 --port=8000 --no-browser
   - Input validation with Pydantic
   - Comprehensive error handling
   - Temp file cleanup in finally blocks
+  - `/ocr` endpoint skips LLM calls for faster processing
 
 **4. Interactive Mode (JupyterLab)**
 - Notebook-based interface (`pdf_parser_docling.ipynb`) for exploration and development
@@ -393,12 +405,37 @@ LLM-classified via prompt:
   - Callback support for automatic processing on selection
 - **Health Check**: Verify API server status
 - **Schema Inspection**: Explore OpenAPI documentation
-- **Single PDF Processing**: Test basic API calls with various parameters
+- **Single PDF Processing**: Test `/process` endpoint (full pipeline)
 - **Batch Processing**: Process multiple PDFs sequentially
 - **Result Validation**: Download and inspect S3 results
 - **Error Handling**: Test invalid requests and error responses
 - **Performance Benchmarks**: Compare Fast vs Accurate modes
 - **Utility Functions**: Reusable helper functions for common tasks
+
+## OCR Visualizer Notebook (ocr_visualizer.ipynb)
+
+**OCR-Only Processing and Visualization**:
+- Dedicated notebook for OCR extraction and bbox visualization
+- Uses `/ocr` API endpoint (no LLM summaries)
+- Fast processing without AI inference costs
+
+**Key Features**:
+- **S3 File Browser**: Select PDFs from S3 buckets
+- **OCR API Call**: Process PDFs with Docling OCR only
+- **Bbox Visualization**: Display color-coded bounding boxes
+  - Green boxes: Figure/image regions
+  - Red boxes: Table regions
+  - Labels show detected categories
+- **Text Markdown**: Preview extracted text inline
+- **Result Download**: Download OCR results to local
+- **Statistics**: View extraction stats (pages, figures, tables)
+
+**Use Cases**:
+- Quick OCR without AI costs
+- Visual validation of extraction accuracy
+- Debugging bbox detection issues
+- Text extraction for further processing
+- Batch OCR validation before full pipeline
 
 **Sections**:
 1. API Server Health Check
@@ -459,10 +496,12 @@ Path("output/sample/sample_final.md").write_text(final_md, encoding="utf-8")
 ```
 
 ### FastAPI Client
+
+**Full pipeline with AI summaries:**
 ```python
 import requests
 
-# Process PDF via API
+# Process PDF via API (full pipeline)
 response = requests.post(
     "http://localhost:3000/process",
     json={
@@ -479,8 +518,31 @@ print(f"Success: {result['success']}")
 print(f"Final markdown: {result['finalMarkdownUri']}")
 print(f"Stats: {result['stats']}")
 print(f"Elapsed: {result['elapsedSeconds']}s")
+```
 
-# Health check
+**OCR-only with bbox visualization:**
+```python
+# OCR processing without LLM summaries
+response = requests.post(
+    "http://localhost:3000/ocr",
+    json={
+        "inputPath": "s3://my-bucket/input/sample.pdf",
+        "outputPath": "s3://my-bucket/output/",
+        "tableMode": "accurate",
+        "generateBboxImages": True,
+    }
+)
+
+result = response.json()
+print(f"Text markdown: {result['textMarkdownUri']}")
+print(f"Bbox images: {result['bboxImagesUris']}")
+print(f"Pages: {result['stats']['pages']}")
+print(f"Figures: {result['stats']['figures']}")
+print(f"Tables: {result['stats']['tables']}")
+```
+
+**Health check:**
+```python
 health = requests.get("http://localhost:3000/health").json()
 print(f"Status: {health['status']}")
 ```
