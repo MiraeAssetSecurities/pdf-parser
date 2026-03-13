@@ -8,6 +8,7 @@ from pathlib import Path
 from docling_core.types.doc import PictureItem, TableItem
 
 from .utils import get_location, get_bbox_str, get_figure_category
+from .table_merger import merge_cross_page_tables
 
 PAGE_BREAK = "<!-- page-break -->"
 
@@ -39,6 +40,16 @@ class MarkdownBuilder:
             page_break_placeholder=PAGE_BREAK,
             escape_html=False,
         )
+
+        # Cross-page 테이블 병합 (메타데이터 삽입 전에 실행)
+        md, merge_stats = merge_cross_page_tables(md, PAGE_BREAK)
+        if merge_stats["merged_groups"] > 0:
+            import logging
+            logging.getLogger("pdf_parser.markdown_builder").info(
+                "Cross-page table merge: %d groups merged (%d tables total)",
+                merge_stats["merged_groups"], merge_stats["total_tables"],
+            )
+        self._merge_stats = merge_stats
 
         md = self._replace_figures(md, image_summaries)
         md = self._wrap_tables(md, table_summaries)
