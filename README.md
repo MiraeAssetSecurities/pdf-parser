@@ -76,8 +76,8 @@ uv run python run.py sample.pdf -o output --no-summary
 # 빠른 테이블 모드 (단순 테이블에 적합)
 uv run python run.py sample.pdf -o output --table-mode fast
 
-# Bedrock 모델 변경
-uv run python run.py sample.pdf -o output --model-id us.anthropic.claude-3-5-sonnet-20241022-v2:0
+# Bedrock 모델 변경 (서울 리전)
+uv run python run.py sample.pdf -o output --model-id ap-northeast-2.anthropic.claude-3-5-sonnet-20241022-v2:0
 
 # 상세 로그 출력
 uv run python run.py sample.pdf -o output -v
@@ -99,6 +99,28 @@ uv run python run_s3.py s3://bucket/input.pdf s3://bucket/output/ --temp-dir /tm
 uv run python run_s3.py s3://bucket/input.pdf s3://bucket/output/ --no-summary --table-mode fast -v
 ```
 
+### FastAPI 서버 (프로덕션 API)
+
+```bash
+# 단일 워커 (개발용)
+uv run uvicorn api:app --host 0.0.0.0 --port 3000
+
+# 멀티 워커 (프로덕션, 동시 요청 처리)
+uv run uvicorn api:app --host 0.0.0.0 --port 3000 --workers 2
+
+# API 문서: http://localhost:3000/docs
+# Health check: http://localhost:3000/health
+```
+
+**API 엔드포인트:**
+- `POST /process`: 전체 파이프라인 (OCR + LLM 요약 + 마크다운)
+- `POST /ocr`: OCR 전용 처리 (바운딩 박스 시각화 포함)
+- `GET /health`: 서버 상태 확인
+
+**성능 최적화:**
+- `--workers 2`: c7i.large의 2코어를 활용하여 동시 요청 처리
+- 워커 수 = CPU 코어 수 권장
+
 ### 웹 UI (app.py)
 
 ```bash
@@ -109,145 +131,88 @@ uv run streamlit run app.py
 ```
 
 **웹 UI 기능:**
-- **S3 → S3 변환**: S3 PDF 목록 조회 및 변환 실행
-- **로컬 변환**: PDF 파일 업로드하여 변환, 결과 다운로드
-- **결과 조회**: S3에 저장된 마크다운 조회 및 미리보기
+- S3 PDF 목록 조회 및 변환 실행
+- 로컬 PDF 업로드 및 결과 다운로드
+- S3 결과 조회 및 미리보기
 
 ### JupyterLab (대화형 개발 환경)
 
 ```bash
-# JupyterLab 서버 시작 (포트 8000)
+# 포그라운드 실행
 uv run jupyter lab --ip=0.0.0.0 --port=8000 --no-browser
 
-# 출력되는 토큰을 사용하여 브라우저에서 접속:
-# http://localhost:8000/?token=<token>
+# 백그라운드 실행 (방법 1: nohup)
+nohup uv run jupyter lab --ip=0.0.0.0 --port=8000 --no-browser > jupyter.log 2>&1 &
 
-# SSH 포트 포워딩이 필요한 경우:
+# 백그라운드 실행 (방법 2: tmux, 권장)
+tmux new -s jupyter
+uv run jupyter lab --ip=0.0.0.0 --port=8000 --no-browser
+# Ctrl+B, D로 세션 분리 / tmux attach -t jupyter로 재접속
+
+# 백그라운드 실행 (방법 3: systemd 서비스, 영구 실행)
+sudo cp jupyter.service.example /etc/systemd/system/jupyter.service
+sudo systemctl daemon-reload
+sudo systemctl start jupyter
+sudo systemctl enable jupyter  # 부팅 시 자동 시작
+sudo systemctl status jupyter  # 상태 확인
+sudo journalctl -u jupyter -f  # 로그 확인
+
+# SSH 포트 포워딩
 # ssh -L 8000:localhost:8000 user@server
 ```
 
-**JupyterLab 기능:**
+**주요 노트북:**
 - **pdf_parser_docling.ipynb**: 핵심 파이프라인 탐색 및 테스트
-  - 단계별 PDF 처리 (변환 → 추출 → 요약 → 마크다운 생성)
-  - 바운딩 박스 시각화 (그림: 초록, 테이블: 빨강)
-  - 인라인 결과 미리보기 및 파라미터 튜닝
-- **api_test.ipynb**: FastAPI 서버 테스트
-  - API 엔드포인트 테스트 및 성능 벤치마크
-  - 배치 처리 시뮬레이션
-  - **S3 파일 브라우저**: 인터랙티브 S3 탐색 위젯
-    - 폴더 클릭 네비게이션
-    - PDF 선택 및 자동 처리
-    - 실시간 경로 편집
+- **api_test.ipynb**: FastAPI 서버 테스트 및 S3 파일 브라우저
 - **ocr_visualizer.ipynb**: OCR 전용 시각화 도구
-  - S3 브라우저로 PDF 선택
-  - OCR API 호출 및 결과 시각화
-  - 바운딩 박스 이미지 인라인 표시
-  - 추출 텍스트 마크다운 미리보기
 
 ### Python 코드에서 직접 사용
+
+자세한 API 사용법은 `CLAUDE.md` 파일을 참고하세요.
 
 **로컬 처리:**
 ```python
 from src.converter import DoclingConverter
 from src.summarizer import BedrockSummarizer
 from src.markdown_builder import MarkdownBuilder
-from pathlib import Path
 
-# 1) PDF 변환
 converter = DoclingConverter(table_mode="accurate")
 parsed = converter.convert("sample.pdf")
-
-# 2) 에셋 저장
-output_dir = Path("output/sample")
-output_dir.mkdir(parents=True, exist_ok=True)
 parsed.save_assets(output_dir)
 
-# 3) LLM 요약 (선택)
-summarizer = BedrockSummarizer(model_id="us.anthropic.claude-3-5-sonnet-20241022-v2:0")
+summarizer = BedrockSummarizer()
 page_summaries = summarizer.summarize_pages(parsed)
 image_summaries = summarizer.summarize_figures(parsed, page_summaries)
 table_summaries = summarizer.summarize_tables(parsed, page_summaries)
 
-# 4) 최종 마크다운 생성
 builder = MarkdownBuilder(parsed, output_dir)
 final_md = builder.build(page_summaries, image_summaries, table_summaries)
-Path("output/sample/sample_final.md").write_text(final_md, encoding="utf-8")
 ```
 
 **S3 연동:**
 ```python
 from src.s3_handler import S3Handler
-from pathlib import Path
 
 s3 = S3Handler(region_name="us-east-1")
-
-# S3에서 PDF 다운로드
 s3.download_pdf("s3://bucket/input/file.pdf", Path("/tmp/file.pdf"))
-
-# 로컬 처리 후 결과를 S3에 업로드
 s3.upload_directory(Path("output/sample"), "s3://bucket/output/sample/")
-
-# S3 폴더의 PDF 목록 조회
 pdf_uris = s3.list_pdfs("s3://bucket/pdfs/")
-
-# S3에서 마크다운 읽기
-content = s3.read_markdown("s3://bucket/output/sample/sample_final.md")
-```
-
-**S3 파일 브라우저 (JupyterLab 전용):**
-```python
-from src.s3_browser import create_s3_browser
-
-# 인터랙티브 S3 브라우저 생성
-browser = create_s3_browser(initial_path="s3://my-bucket/pdfs/")
-
-# 선택된 PDF 가져오기
-selected_pdf = browser.get_selected()  # 사용자가 PDF 클릭 후
-
-# 콜백 함수와 함께 사용
-def on_select(s3_uri):
-    print(f"선택됨: {s3_uri}")
-    # 자동으로 처리 시작
-
-browser = create_s3_browser(
-    initial_path="s3://my-bucket/",
-    on_select=on_select
-)
 ```
 
 **FastAPI 클라이언트:**
 ```python
 import requests
 
-# 전체 파이프라인 (LLM 요약 포함)
 response = requests.post(
     "http://localhost:3000/process",
     json={
-        "inputPath": "s3://my-bucket/input/sample.pdf",
-        "outputPath": "s3://my-bucket/output/",
-        "modelId": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        "noSummary": False,
+        "inputPath": "s3://bucket/input/sample.pdf",
+        "outputPath": "s3://bucket/output/",
         "tableMode": "accurate",
     }
 )
-
 result = response.json()
-print(f"Final markdown: {result['finalMarkdownUri']}")
-
-# OCR 전용 (바운딩 박스 시각화 포함)
-response = requests.post(
-    "http://localhost:3000/ocr",
-    json={
-        "inputPath": "s3://my-bucket/input/sample.pdf",
-        "outputPath": "s3://my-bucket/output/",
-        "tableMode": "accurate",
-        "generateBboxImages": True,
-    }
-)
-
-result = response.json()
-print(f"Text markdown: {result['textMarkdownUri']}")
-print(f"Bbox images: {len(result['bboxImagesUris'])} pages")
+print(result['finalMarkdownUri'])
 ```
 
 ## 출력 구조

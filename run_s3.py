@@ -46,6 +46,7 @@ def process_single_s3(
     table_mode: str,
     temp_dir: Path,
     verbose: bool = False,
+    use_accelerator: bool = False,
 ) -> tuple[str, list[str]]:
     """S3에서 PDF 다운로드 → 변환 → 결과를 S3에 업로드.
 
@@ -84,8 +85,8 @@ def process_single_s3(
     s3.download_pdf(s3_pdf_uri, local_pdf)
 
     # 2) Docling 변환 (로컬)
-    logger.info("📄 [%s] Docling conversion started", pdf_name)
-    converter = DoclingConverter(table_mode=table_mode)
+    logger.info("📄 [%s] Docling conversion started (accelerator=%s)", pdf_name, use_accelerator)
+    converter = DoclingConverter(table_mode=table_mode, use_accelerator=use_accelerator)
     parsed = converter.convert(local_pdf)
     n_pages = len(parsed.doc.pages)
     n_figs = len(parsed.get_figures())
@@ -169,7 +170,7 @@ def main():
     )
     parser.add_argument(
         "--model-id",
-        default="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        default="ap-northeast-2.anthropic.claude-haiku-4-5-20251001-v1:0",
         help="Bedrock 모델 ID",
     )
     parser.add_argument(
@@ -177,6 +178,11 @@ def main():
         choices=["accurate", "fast"],
         default="accurate",
         help="TableFormer 모드",
+    )
+    parser.add_argument(
+        "--use-accelerator",
+        action="store_true",
+        help="CPU accelerator 활성화 (num_threads=4)",
     )
     parser.add_argument(
         "--temp-dir",
@@ -225,6 +231,7 @@ def main():
                 args.table_mode,
                 temp_dir,
                 args.verbose,
+                args.use_accelerator,
             )
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -260,6 +267,7 @@ def main():
                 args.table_mode,
                 temp_dir,
                 args.verbose,
+                args.use_accelerator,
             )
             futs[fut] = (pdf_uri, temp_dir)
 

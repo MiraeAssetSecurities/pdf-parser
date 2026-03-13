@@ -10,8 +10,8 @@
     # LLM 요약 비활성화 (Docling 추출만)
     python run.py sample.pdf -o output --no-summary
 
-    # Bedrock 모델 변경
-    python run.py sample.pdf -o output --model-id us.anthropic.claude-haiku-4-5-20251001-v1:0
+    # Bedrock 모델 변경 (서울 리전)
+    python run.py sample.pdf -o output --model-id ap-northeast-2.anthropic.claude-haiku-4-5-20251001-v1:0
 """
 
 from __future__ import annotations
@@ -40,6 +40,7 @@ def parse_single(
     no_summary: bool,
     table_mode: str,
     verbose: bool = False,
+    use_accelerator: bool = False,
 ) -> Path:
     """단일 PDF 파싱 → 최종 마크다운 저장. 반환: 저장 경로."""
     # 자식 프로세스에서도 로깅 설정 필요
@@ -55,8 +56,8 @@ def parse_single(
     t0 = time.time()
 
     # 1) Docling 변환
-    logger.info("📄 [%s] Docling conversion started", name)
-    converter = DoclingConverter(table_mode=table_mode)
+    logger.info("📄 [%s] Docling conversion started (accelerator=%s)", name, use_accelerator)
+    converter = DoclingConverter(table_mode=table_mode, use_accelerator=use_accelerator)
     parsed = converter.convert(pdf_path)
     n_pages = len(parsed.doc.pages)
     n_figs = len(parsed.get_figures())
@@ -113,8 +114,9 @@ def main():
     parser.add_argument("-o", "--output", type=Path, default=Path("output"), help="출력 디렉토리 (기본: output)")
     parser.add_argument("--workers", type=int, default=2, help="폴더 모드 시 PDF 병렬 처리 수 (기본: 2)")
     parser.add_argument("--no-summary", action="store_true", help="LLM 요약 비활성화")
-    parser.add_argument("--model-id", default="us.anthropic.claude-haiku-4-5-20251001-v1:0", help="Bedrock 모델 ID")
+    parser.add_argument("--model-id", default="ap-northeast-2.anthropic.claude-haiku-4-5-20251001-v1:0", help="Bedrock 모델 ID")
     parser.add_argument("--table-mode", choices=["accurate", "fast"], default="accurate", help="TableFormer 모드")
+    parser.add_argument("--use-accelerator", action="store_true", help="CPU accelerator 활성화 (num_threads=4)")
     parser.add_argument("-v", "--verbose", action="store_true", help="DEBUG 로그 출력")
     args = parser.parse_args()
 
@@ -123,7 +125,7 @@ def main():
 
     # 단일 PDF
     if args.input.is_file():
-        parse_single(args.input, args.output, args.model_id, args.no_summary, args.table_mode, args.verbose)
+        parse_single(args.input, args.output, args.model_id, args.no_summary, args.table_mode, args.verbose, args.use_accelerator)
         return
 
     # 폴더 일괄 처리
@@ -139,7 +141,7 @@ def main():
 
         with ProcessPoolExecutor(max_workers=args.workers) as ex:
             futs = {
-                ex.submit(parse_single, p, args.output, args.model_id, args.no_summary, args.table_mode, args.verbose): p
+                ex.submit(parse_single, p, args.output, args.model_id, args.no_summary, args.table_mode, args.verbose, args.use_accelerator): p
                 for p in pdfs
             }
             for f in as_completed(futs):

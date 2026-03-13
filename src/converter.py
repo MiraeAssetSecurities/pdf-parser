@@ -11,6 +11,8 @@ from docling.datamodel.pipeline_options import (
     PdfPipelineOptions,
     TableFormerMode,
     TableStructureOptions,
+    AcceleratorOptions,
+    AcceleratorDevice,
 )
 from docling.document_converter import DocumentConverter, PdfFormatOption
 
@@ -22,7 +24,7 @@ logger = logging.getLogger("pdf_parser.converter")
 class DoclingConverter:
     """PDF → Docling Document 변환 및 요소(텍스트/테이블/이미지) 추출."""
 
-    def __init__(self, image_scale: float = 2.0, table_mode: str = "accurate"):
+    def __init__(self, image_scale: float = 2.0, table_mode: str = "accurate", use_accelerator: bool = False):
         opts = PdfPipelineOptions()
         opts.images_scale = image_scale
         opts.generate_page_images = True
@@ -34,6 +36,15 @@ class DoclingConverter:
             mode=TableFormerMode.ACCURATE if table_mode == "accurate" else TableFormerMode.FAST,
             do_cell_matching=True,
         )
+
+        # CPU 병렬 처리 최적화 (선택적)
+        if use_accelerator:
+            opts.accelerator_options = AcceleratorOptions(
+                num_threads=4,  # 하이퍼스레딩 활용
+                device=AcceleratorDevice.CPU
+            )
+            logger.info("⚡ Accelerator enabled: num_threads=4, device=CPU")
+
         self._converter = DocumentConverter(
             format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)}
         )

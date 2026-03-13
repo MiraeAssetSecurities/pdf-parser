@@ -41,7 +41,7 @@ uv run python run.py sample.pdf -o output --no-summary
 uv run python run.py sample.pdf -o output --table-mode fast
 
 # Change Bedrock model
-uv run python run.py sample.pdf -o output --model-id us.anthropic.claude-3-5-sonnet-20241022-v2:0
+uv run python run.py sample.pdf -o output --model-id ap-northeast-2.anthropic.claude-3-5-sonnet-20241022-v2:0
 
 # Verbose logging
 uv run python run.py sample.pdf -o output -v
@@ -66,11 +66,19 @@ uv run python run_s3.py s3://bucket/input.pdf s3://bucket/output/ --no-summary -
 ### FastAPI Server (Production API)
 
 ```bash
-# Start FastAPI server on port 3000
+# Single worker (development)
 uv run uvicorn api:app --host 0.0.0.0 --port 3000
+
+# Multiple workers (production, handles concurrent requests)
+uv run uvicorn api:app --host 0.0.0.0 --port 3000 --workers 2
 
 # Access API docs at http://localhost:3000/docs
 # Health check: http://localhost:3000/health
+
+# Performance notes:
+# - --workers 2: Utilizes 2 CPU cores for parallel request processing
+# - Each worker runs independently and can handle one request at a time
+# - Total capacity: 2 concurrent requests with --workers 2
 
 # Full pipeline with AI summaries
 curl -X POST http://localhost:3000/process \
@@ -78,7 +86,7 @@ curl -X POST http://localhost:3000/process \
   -d '{
     "inputPath": "s3://my-bucket/input/sample.pdf",
     "outputPath": "s3://my-bucket/output/",
-    "modelId": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "modelId": "ap-northeast-2.anthropic.claude-haiku-4-5-20251001-v1:0",
     "noSummary": false,
     "tableMode": "accurate"
   }'
@@ -334,11 +342,11 @@ LLM-classified via prompt:
 
 ## Bedrock Configuration
 
-**Default model**: `us.anthropic.claude-haiku-4-5-20251001-v1:0` (fast, cost-effective)
+**Default model**: `ap-northeast-2.anthropic.claude-haiku-4-5-20251001-v1:0` (fast, cost-effective, Seoul region)
 
-**Available models**:
-- Haiku 4.5: `us.anthropic.claude-haiku-4-5-20251001-v1:0`
-- Sonnet 3.5: `us.anthropic.claude-3-5-sonnet-20241022-v2:0`
+**Available models (Seoul region: ap-northeast-2)**:
+- Haiku 4.5: `ap-northeast-2.anthropic.claude-haiku-4-5-20251001-v1:0`
+- Sonnet 3.5: `ap-northeast-2.anthropic.claude-3-5-sonnet-20241022-v2:0`
 
 **API format**:
 - Version: `bedrock-2023-05-31`
@@ -485,7 +493,7 @@ output_dir = Path("output/sample")
 output_dir.mkdir(parents=True, exist_ok=True)
 parsed.save_assets(output_dir)
 
-summarizer = BedrockSummarizer(model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0")
+summarizer = BedrockSummarizer(model_id="ap-northeast-2.anthropic.claude-haiku-4-5-20251001-v1:0")
 page_summaries = summarizer.summarize_pages(parsed)
 image_summaries = summarizer.summarize_figures(parsed, page_summaries)
 table_summaries = summarizer.summarize_tables(parsed, page_summaries)
@@ -507,7 +515,7 @@ response = requests.post(
     json={
         "inputPath": "s3://my-bucket/input/sample.pdf",
         "outputPath": "s3://my-bucket/output/",
-        "modelId": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "modelId": "ap-northeast-2.anthropic.claude-haiku-4-5-20251001-v1:0",
         "noSummary": False,
         "tableMode": "accurate",
     }

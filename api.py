@@ -1,7 +1,11 @@
 """FastAPI server for PDF processing with S3 support.
 
 Usage:
+    # Single worker (development)
     uv run uvicorn api:app --host 0.0.0.0 --port 3000
+
+    # Multiple workers (production, parallel request handling)
+    uv run uvicorn api:app --host 0.0.0.0 --port 3000 --workers 2
 
 Endpoints:
     POST /process - Process a single PDF from S3 (full pipeline)
@@ -56,7 +60,7 @@ class ProcessRequest(BaseModel):
         example="s3://my-bucket/output/",
     )
     modelId: Optional[str] = Field(
-        default="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        default="ap-northeast-2.anthropic.claude-haiku-4-5-20251001-v1:0",
         description="Bedrock model ID for AI summaries",
     )
     noSummary: Optional[bool] = Field(
@@ -66,6 +70,10 @@ class ProcessRequest(BaseModel):
     tableMode: Optional[str] = Field(
         default="accurate",
         description="Table extraction mode: 'accurate' or 'fast'",
+    )
+    useAccelerator: Optional[bool] = Field(
+        default=False,
+        description="Enable CPU accelerator for faster processing (num_threads=4)",
     )
 
 
@@ -100,6 +108,10 @@ class OCRRequest(BaseModel):
     generateBboxImages: Optional[bool] = Field(
         default=True,
         description="Generate bounding box visualization images",
+    )
+    useAccelerator: Optional[bool] = Field(
+        default=False,
+        description="Enable CPU accelerator for faster processing (num_threads=4)",
     )
 
 
@@ -171,8 +183,8 @@ async def ocr_pdf(request: OCRRequest):
         s3.download_pdf(request.inputPath, local_pdf)
 
         # 2) Docling conversion (OCR only)
-        logger.info("📄 [%s] Docling OCR conversion started", pdf_name)
-        converter = DoclingConverter(table_mode=request.tableMode)
+        logger.info("📄 [%s] Docling OCR conversion started (accelerator=%s)", pdf_name, request.useAccelerator)
+        converter = DoclingConverter(table_mode=request.tableMode, use_accelerator=request.useAccelerator)
         parsed = converter.convert(local_pdf)
         n_pages = len(parsed.doc.pages)
         n_figs = len(parsed.get_figures())
@@ -228,6 +240,8 @@ async def ocr_pdf(request: OCRRequest):
                 "figures": n_figs,
                 "tables": n_tbls,
                 "bboxImages": len(bbox_uris) if bbox_uris else 0,
+                "acceleratorUsed": request.useAccelerator,
+                "tableMode": request.tableMode,
             },
             elapsedSeconds=round(elapsed, 2),
         )
@@ -307,8 +321,8 @@ async def process_pdf(request: ProcessRequest):
         s3.download_pdf(request.inputPath, local_pdf)
 
         # 2) Docling conversion
-        logger.info("📄 [%s] Docling conversion started", pdf_name)
-        converter = DoclingConverter(table_mode=request.tableMode)
+        logger.info("📄 [%s] Docling conversion started (accelerator=%s)", pdf_name, request.useAccelerator)
+        converter = DoclingConverter(table_mode=request.tableMode, use_accelerator=request.useAccelerator)
         parsed = converter.convert(local_pdf)
         n_pages = len(parsed.doc.pages)
         n_figs = len(parsed.get_figures())
@@ -368,6 +382,8 @@ async def process_pdf(request: ProcessRequest):
                 "figures": n_figs,
                 "tables": n_tbls,
                 "summariesGenerated": not request.noSummary,
+                "acceleratorUsed": request.useAccelerator,
+                "tableMode": request.tableMode,
             },
             elapsedSeconds=round(elapsed, 2),
         )

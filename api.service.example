@@ -1,0 +1,15 @@
+[Unit]
+Description=FastAPI Server for PDF Parser
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/pdf-parser
+Environment="PATH=/snap/bin:/home/ubuntu/.local/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/snap/bin/uv run uvicorn api:app --host 0.0.0.0 --port 3000 --workers 2
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
