@@ -17,7 +17,7 @@ from fastmcp.server.context import Context
 
 load_dotenv()
 
-DEFAULT_MODEL_ID = os.getenv("MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
+DEFAULT_MODEL_ID = os.getenv("MODEL_ID", "ap-northeast-2.anthropic.claude-haiku-4-5-20251001-v1:0")
 
 mcp = FastMCP(
     name="doc-parser",
@@ -104,7 +104,7 @@ async def parse_document(
     no_summary: bool = False,
     table_mode: str = "accurate",
     output_format: str = "markdown",
-    bedrock_region: str = "us-east-1",
+    bedrock_region: str = "ap-northeast-2",
 ) -> str:
     """단일 문서를 파싱합니다.
 
@@ -162,7 +162,7 @@ async def parse_directory(
     no_summary: bool = False,
     table_mode: str = "accurate",
     output_format: str = "markdown",
-    bedrock_region: str = "us-east-1",
+    bedrock_region: str = "ap-northeast-2",
 ) -> str:
     """폴더 내 문서를 일괄 파싱합니다.
 

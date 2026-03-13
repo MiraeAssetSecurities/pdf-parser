@@ -7,16 +7,14 @@ Usage:
     # Single Office file
     uv run python run.py report.docx -o output --to-markdown
 
-<<<<<<< HEAD
     # LLM 요약 비활성화 (Docling 추출만)
-    python run.py sample.pdf -o output --no-summary
+    uv run python run.py sample.pdf -o output --no-summary
 
     # Bedrock 모델 변경 (서울 리전)
-    python run.py sample.pdf -o output --model-id ap-northeast-2.anthropic.claude-haiku-4-5-20251001-v1:0
-=======
+    uv run python run.py sample.pdf -o output --model-id ap-northeast-2.anthropic.claude-haiku-4-5-20251001-v1:0
+
     # Batch folder (PDF + Office mixed)
     uv run python run.py ./docs/ -o output --workers 4
->>>>>>> 8d17cc8f69050be0ab3ef87ed4e82820f1901b56
 """
 
 from __future__ import annotations
@@ -33,7 +31,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DEFAULT_MODEL_ID = os.getenv("MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
+DEFAULT_MODEL_ID = os.getenv("MODEL_ID", "ap-northeast-2.anthropic.claude-haiku-4-5-20251001-v1:0")
 
 logger = logging.getLogger("doc_parser")
 
@@ -86,14 +84,9 @@ def parse_pdf(
     doc_output.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
 
-<<<<<<< HEAD
     # 1) Docling 변환
-    logger.info("📄 [%s] Docling conversion started (accelerator=%s)", name, use_accelerator)
+    pdf_logger.info("📄 [%s] Docling conversion started (accelerator=%s)", name, use_accelerator)
     converter = DoclingConverter(table_mode=table_mode, use_accelerator=use_accelerator)
-=======
-    pdf_logger.info("📄 [%s] Docling conversion started", name)
-    converter = DoclingConverter(table_mode=table_mode)
->>>>>>> 8d17cc8f69050be0ab3ef87ed4e82820f1901b56
     parsed = converter.convert(pdf_path)
     n_pages = len(parsed.doc.pages)
     n_figs = len(parsed.get_figures())
@@ -144,7 +137,7 @@ def parse_office(
     model_id: str,
     no_summary: bool,
     output_format: str = "markdown",
-    bedrock_region: str = "us-east-1",
+    bedrock_region: str = "ap-northeast-2",
     verbose: bool = False,
 ) -> Path:
     """Parse a single Office file."""
@@ -183,17 +176,6 @@ def parse_single(
 
 
 def main():
-<<<<<<< HEAD
-    parser = argparse.ArgumentParser(description="Docling PDF 파서 + Bedrock LLM 요약")
-    parser.add_argument("input", type=Path, help="PDF 파일 또는 PDF가 들어있는 폴더 경로")
-    parser.add_argument("-o", "--output", type=Path, default=Path("output"), help="출력 디렉토리 (기본: output)")
-    parser.add_argument("--workers", type=int, default=2, help="폴더 모드 시 PDF 병렬 처리 수 (기본: 2)")
-    parser.add_argument("--no-summary", action="store_true", help="LLM 요약 비활성화")
-    parser.add_argument("--model-id", default="ap-northeast-2.anthropic.claude-haiku-4-5-20251001-v1:0", help="Bedrock 모델 ID")
-    parser.add_argument("--table-mode", choices=["accurate", "fast"], default="accurate", help="TableFormer 모드")
-    parser.add_argument("--use-accelerator", action="store_true", help="CPU accelerator 활성화 (num_threads=4)")
-    parser.add_argument("-v", "--verbose", action="store_true", help="DEBUG 로그 출력")
-=======
     parser = argparse.ArgumentParser(description="Document Parser — PDF + Office(docx/pptx/xlsx) unified CLI")
     parser.add_argument("input", type=Path, help="File or folder path")
     parser.add_argument("-o", "--output", type=Path, default=Path("output"), help="Output directory (default: output)")
@@ -201,12 +183,12 @@ def main():
     parser.add_argument("--no-summary", action="store_true", help="Disable LLM summarization")
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID, help="Bedrock model ID (default: .env MODEL_ID)")
     parser.add_argument("--table-mode", choices=["accurate", "fast"], default="accurate", help="PDF TableFormer mode")
+    parser.add_argument("--use-accelerator", action="store_true", help="CPU accelerator (num_threads=4)")
     parser.add_argument("--to-markdown", action="store_true", help="Office output format: markdown (default)")
     parser.add_argument("--to-html", action="store_true", help="Office output format: html")
     parser.add_argument("--to-text", action="store_true", help="Office output format: text")
-    parser.add_argument("--bedrock-region", default="us-east-1", help="Bedrock region")
+    parser.add_argument("--bedrock-region", default="ap-northeast-2", help="Bedrock region (default: ap-northeast-2)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable DEBUG logging")
->>>>>>> 8d17cc8f69050be0ab3ef87ed4e82820f1901b56
     args = parser.parse_args()
 
     _setup_logging(args.verbose)
@@ -217,14 +199,10 @@ def main():
 
     # Single file
     if args.input.is_file():
-<<<<<<< HEAD
-        parse_single(args.input, args.output, args.model_id, args.no_summary, args.table_mode, args.verbose, args.use_accelerator)
-=======
         parse_single(
             args.input, args.output, args.model_id, args.no_summary,
             args.table_mode, output_format, args.bedrock_region, args.verbose,
         )
->>>>>>> 8d17cc8f69050be0ab3ef87ed4e82820f1901b56
         return
 
     # Batch folder
@@ -240,16 +218,11 @@ def main():
 
         with ProcessPoolExecutor(max_workers=args.workers) as ex:
             futs = {
-<<<<<<< HEAD
-                ex.submit(parse_single, p, args.output, args.model_id, args.no_summary, args.table_mode, args.verbose, args.use_accelerator): p
-                for p in pdfs
-=======
                 ex.submit(
                     parse_single, f, args.output, args.model_id, args.no_summary,
                     args.table_mode, output_format, args.bedrock_region, args.verbose,
                 ): f
                 for f in files
->>>>>>> 8d17cc8f69050be0ab3ef87ed4e82820f1901b56
             }
             for fut in as_completed(futs):
                 f = futs[fut]

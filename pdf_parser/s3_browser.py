@@ -8,7 +8,7 @@ from typing import Callable
 import ipywidgets as widgets
 from IPython.display import display
 
-from src.s3_handler import S3Handler
+from pdf_parser.s3_handler import S3Handler
 
 logger = logging.getLogger("pdf_parser.s3_browser")
 

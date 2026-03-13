@@ -5,11 +5,8 @@ description = "PDF + Office document parser with AI summarization"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-<<<<<<< HEAD
     "boto3>=1.35.0",
-=======
     # PDF parser (Docling)
->>>>>>> 8d17cc8f69050be0ab3ef87ed4e82820f1901b56
     "docling>=2.76.0",
     "dotenv>=0.9.9",
     "ipykernel>=7.2.0",
@@ -20,12 +17,10 @@ dependencies = [
     "streamlit>=1.40.0",
     "strands-agents>=1.28.0",
     "tabulate>=0.9.0",
-<<<<<<< HEAD
     "jupyterlab>=4.5.5",
     "fastapi>=0.135.1",
     "uvicorn>=0.41.0",
     "ipywidgets",
-=======
     # Office parser
     "python-docx>=0.8.11",
     "openpyxl>=3.0.0",
@@ -38,5 +33,4 @@ dependencies = [
     "python-dotenv>=1.2.2",
     # MCP server
     "fastmcp>=2.0.0",
->>>>>>> 8d17cc8f69050be0ab3ef87ed4e82820f1901b56
 ]

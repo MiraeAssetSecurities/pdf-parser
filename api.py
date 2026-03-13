@@ -25,11 +25,12 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from src.converter import DoclingConverter
-from src.s3_handler import S3Handler
-from src.summarizer import BedrockSummarizer
-from src.markdown_builder import MarkdownBuilder
-from src.utils import generate_bbox_images
+from pdf_parser.converter import DoclingConverter
+from pdf_parser.s3_handler import S3Handler
+from pdf_parser.summarizer import BedrockSummarizer
+from pdf_parser.markdown_builder import MarkdownBuilder
+from pdf_parser.utils import generate_bbox_images
+from office_parser import OfficeParser, OfficeParserConfig
 
 # Setup logging
 logging.basicConfig(
@@ -40,18 +41,23 @@ logging.basicConfig(
 logger = logging.getLogger("pdf_parser.api")
 
 app = FastAPI(
-    title="PDF Parser API",
-    description="Extract text, tables, and images from PDFs with AI summaries",
-    version="0.1.0",
+    title="Document Parser API",
+    description="Extract text, tables, and images from PDFs and Office documents with AI summaries",
+    version="0.2.0",
 )
+
+# Supported file extensions
+PDF_EXTENSIONS = {".pdf"}
+OFFICE_EXTENSIONS = {".docx", ".pptx", ".xlsx", ".odt", ".odp", ".ods", ".rtf"}
+ALL_EXTENSIONS = PDF_EXTENSIONS | OFFICE_EXTENSIONS
 
 
 class ProcessRequest(BaseModel):
-    """Request model for PDF processing."""
+    """Request model for document processing (PDF or Office)."""
 
     inputPath: str = Field(
         ...,
-        description="S3 URI of input PDF (e.g., s3://bucket/input/sample.pdf)",
+        description="S3 URI of input file (e.g., s3://bucket/input/sample.pdf or report.docx)",
         example="s3://my-bucket/input/sample.pdf",
     )
     outputPath: str = Field(
@@ -65,15 +71,23 @@ class ProcessRequest(BaseModel):
     )
     noSummary: Optional[bool] = Field(
         default=False,
-        description="Skip LLM summaries (only Docling extraction)",
+        description="Skip LLM summaries",
     )
     tableMode: Optional[str] = Field(
         default="accurate",
-        description="Table extraction mode: 'accurate' or 'fast'",
+        description="[PDF only] Table extraction mode: 'accurate' or 'fast'",
     )
     useAccelerator: Optional[bool] = Field(
         default=False,
-        description="Enable CPU accelerator for faster processing (num_threads=4)",
+        description="[PDF only] Enable CPU accelerator for faster processing (num_threads=4)",
+    )
+    outputFormat: Optional[str] = Field(
+        default="markdown",
+        description="[Office only] Output format: 'markdown', 'html', or 'text'",
+    )
+    bedrockRegion: Optional[str] = Field(
+        default="ap-northeast-2",
+        description="[Office only] Bedrock region",
     )
 
 
@@ -122,6 +136,48 @@ class OCRResponse(BaseModel):
     message: str
     textMarkdownUri: Optional[str] = None
     bboxImagesUris: Optional[list[str]] = None
+    uploadedFiles: Optional[list[str]] = None
+    stats: Optional[dict] = None
+    elapsedSeconds: Optional[float] = None
+
+
+class OfficeProcessRequest(BaseModel):
+    """Request model for Office document processing."""
+
+    inputPath: str = Field(
+        ...,
+        description="S3 URI of input Office file (e.g., s3://bucket/input/report.docx)",
+        example="s3://my-bucket/input/report.docx",
+    )
+    outputPath: str = Field(
+        ...,
+        description="S3 URI of output base path (e.g., s3://bucket/output/)",
+        example="s3://my-bucket/output/",
+    )
+    modelId: Optional[str] = Field(
+        default="ap-northeast-2.anthropic.claude-haiku-4-5-20251001-v1:0",
+        description="Bedrock model ID for AI summaries",
+    )
+    noSummary: Optional[bool] = Field(
+        default=False,
+        description="Skip LLM summaries",
+    )
+    outputFormat: Optional[str] = Field(
+        default="markdown",
+        description="Output format: 'markdown', 'html', or 'text'",
+    )
+    bedrockRegion: Optional[str] = Field(
+        default="ap-northeast-2",
+        description="Bedrock region",
+    )
+
+
+class OfficeProcessResponse(BaseModel):
+    """Response model for Office document processing."""
+
+    success: bool
+    message: str
+    outputUri: Optional[str] = None
     uploadedFiles: Optional[list[str]] = None
     stats: Optional[dict] = None
     elapsedSeconds: Optional[float] = None
@@ -262,12 +318,23 @@ async def ocr_pdf(request: OCRRequest):
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "service": "pdf-parser-api"}
+    return {
+        "status": "healthy",
+        "service": "document-parser-api",
+        "version": "0.2.0",
+        "supported_formats": {
+            "pdf": list(PDF_EXTENSIONS),
+            "office": list(OFFICE_EXTENSIONS),
+        },
+    }
 
 
 @app.post("/process", response_model=ProcessResponse)
 async def process_pdf(request: ProcessRequest):
     """Process a single PDF from S3 and upload results to S3.
+
+    This endpoint is specifically for PDF files.
+    For unified processing (PDF + Office), use /process-document instead.
 
     Args:
         request: ProcessRequest with inputPath and outputPath
@@ -393,6 +460,191 @@ async def process_pdf(request: ProcessRequest):
         raise HTTPException(
             status_code=500,
             detail=f"Processing failed: {str(e)}",
+        )
+
+    finally:
+        # Cleanup temp files
+        logger.info("🧹 Cleaning up temp files")
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+@app.post("/process-document")
+async def process_document(request: ProcessRequest):
+    """Unified endpoint: Process PDF or Office document based on file extension.
+
+    Automatically routes to appropriate processor based on file extension.
+
+    Supports:
+    - PDF: .pdf
+    - Office: .docx, .pptx, .xlsx, .odt, .odp, .ods, .rtf
+
+    Args:
+        request: ProcessRequest with inputPath and outputPath
+
+    Returns:
+        ProcessResponse (for PDF) or OfficeProcessResponse (for Office)
+    """
+    # Validate S3 URIs
+    if not request.inputPath.startswith("s3://"):
+        raise HTTPException(
+            status_code=400,
+            detail="inputPath must be S3 URI starting with s3://",
+        )
+    if not request.outputPath.startswith("s3://"):
+        raise HTTPException(
+            status_code=400,
+            detail="outputPath must be S3 URI starting with s3://",
+        )
+
+    # Determine file type
+    file_ext = Path(request.inputPath).suffix.lower()
+
+    if file_ext in PDF_EXTENSIONS:
+        # Route to PDF processor
+        return await process_pdf(request)
+    elif file_ext in OFFICE_EXTENSIONS:
+        # Convert to OfficeProcessRequest and route to Office processor
+        office_request = OfficeProcessRequest(
+            inputPath=request.inputPath,
+            outputPath=request.outputPath,
+            modelId=request.modelId,
+            noSummary=request.noSummary,
+            outputFormat=request.outputFormat or "markdown",
+            bedrockRegion=request.bedrockRegion or "ap-northeast-2",
+        )
+        return await process_office(office_request)
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file extension: {file_ext}. Supported: {', '.join(sorted(ALL_EXTENSIONS))}",
+        )
+
+
+@app.post("/process-office", response_model=OfficeProcessResponse)
+async def process_office(request: OfficeProcessRequest):
+    """Process a single Office document from S3 and upload results to S3.
+
+    Supports: docx, pptx, xlsx, odt, odp, ods, rtf
+
+    Args:
+        request: OfficeProcessRequest with inputPath and outputPath
+
+    Returns:
+        OfficeProcessResponse with processing results
+    """
+    # Validate S3 URIs
+    if not request.inputPath.startswith("s3://"):
+        raise HTTPException(
+            status_code=400,
+            detail="inputPath must be S3 URI starting with s3://",
+        )
+    if not request.outputPath.startswith("s3://"):
+        raise HTTPException(
+            status_code=400,
+            detail="outputPath must be S3 URI starting with s3://",
+        )
+
+    # Validate file extension
+    file_ext = Path(request.inputPath).suffix.lower()
+    if file_ext not in OFFICE_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"inputPath must be an Office file. Supported: {', '.join(sorted(OFFICE_EXTENSIONS))}",
+        )
+
+    # Validate output format
+    if request.outputFormat not in ["markdown", "html", "text"]:
+        raise HTTPException(
+            status_code=400,
+            detail="outputFormat must be 'markdown', 'html', or 'text'",
+        )
+
+    # Create temp directory
+    temp_dir = Path(tempfile.mkdtemp(prefix="office-parser-"))
+
+    try:
+        t0 = time.time()
+        logger.info("🚀 Office processing request: %s → %s", request.inputPath, request.outputPath)
+
+        # Initialize handlers
+        s3 = S3Handler()
+
+        # Extract file name
+        file_name = Path(request.inputPath).name
+        file_stem = Path(request.inputPath).stem
+
+        # Local paths
+        local_file = temp_dir / file_name
+        local_output = temp_dir / file_stem
+        local_output.mkdir(parents=True, exist_ok=True)
+
+        # 1) Download file from S3
+        logger.info("📥 [%s] Downloading from S3", file_name)
+        s3.download_pdf(request.inputPath, local_file)  # Reuse download_pdf (works for any file)
+
+        # 2) Parse Office document
+        logger.info("📄 [%s] Office parsing started", file_name)
+        config = OfficeParserConfig(
+            summarize=not request.noSummary,
+            bedrock_model_id=request.modelId,
+            bedrock_region=request.bedrockRegion,
+        )
+        ast = OfficeParser.parse_office(str(local_file), config)
+
+        # 3) Save attachments to pictures/ folder
+        pictures_dir = local_output / "pictures"
+        image_dir = None
+        if config.extract_attachments and ast.attachments:
+            pictures_dir.mkdir(parents=True, exist_ok=True)
+            for att in ast.attachments:
+                (pictures_dir / att.filename).write_bytes(att.data)
+            image_dir = "pictures"
+            logger.info("💾 [%s] Saved %d attachments", file_name, len(ast.attachments))
+
+        # 4) Generate output
+        ext_map = {"html": ".html", "markdown": ".md", "text": ".txt"}
+        out_ext = ext_map.get(request.outputFormat, ".md")
+        out_path = local_output / f"{file_stem}{out_ext}"
+
+        if request.outputFormat == "html":
+            output = ast.to_html(image_dir=image_dir)
+        elif request.outputFormat == "markdown":
+            output = ast.to_markdown(image_dir=image_dir)
+        else:  # text
+            output = ast.to_text()
+
+        out_path.write_text(output, encoding="utf-8")
+        logger.info("✅ [%s] Parsing done", file_name)
+
+        # 5) Upload to S3
+        logger.info("📤 [%s] Uploading results to S3", file_name)
+        s3_output_uri = request.outputPath.rstrip("/") + f"/{file_stem}/"
+        uploaded_uris = s3.upload_directory(local_output, s3_output_uri)
+
+        output_s3_uri = s3_output_uri + f"{file_stem}{out_ext}"
+
+        elapsed = time.time() - t0
+        logger.info("🎉 [%s] Done → %s (%.1fs total)", file_name, output_s3_uri, elapsed)
+
+        return OfficeProcessResponse(
+            success=True,
+            message=f"Successfully processed {file_name}",
+            outputUri=output_s3_uri,
+            uploadedFiles=uploaded_uris,
+            stats={
+                "fileType": file_ext,
+                "outputFormat": request.outputFormat,
+                "attachments": len(ast.attachments),
+                "summariesGenerated": not request.noSummary,
+            },
+            elapsedSeconds=round(elapsed, 2),
+        )
+
+    except Exception as e:
+        logger.error("❌ Office processing failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Office processing failed: {str(e)}",
         )
 
     finally:
