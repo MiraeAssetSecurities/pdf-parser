@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 .env
 output/
 pdfs/
@@ -9,3 +10,12 @@ temp_bbox/
 temp_img.jpg
 *.pyc
 .DS_Store
+=======
+__pycache__/
+*.pyc
+.DS_Store
+.env
+output/
+log/
+.venv/
+>>>>>>> 8d17cc8f69050be0ab3ef87ed4e82820f1901b56
