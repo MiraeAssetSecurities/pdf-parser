@@ -26,6 +26,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from pdf_parser.converter import DoclingConverter
+from pdf_parser.ibm_converter import IbmLayoutConverter
 from pdf_parser.s3_handler import S3Handler
 from pdf_parser.summarizer import BedrockSummarizer
 from pdf_parser.markdown_builder import MarkdownBuilder
@@ -127,6 +128,16 @@ class OCRRequest(BaseModel):
         default=False,
         description="Enable CPU accelerator for faster processing (num_threads=4)",
     )
+    layoutModel: Optional[str] = Field(
+        default="docling",
+        description="Layout detection model: 'docling' (full Docling pipeline) or 'ibm' (IBM LayoutPredictor direct)",
+    )
+    ibmConfidenceThreshold: Optional[float] = Field(
+        default=0.3,
+        description="[IBM only] Minimum confidence for bbox display (0.1~1.0). Lower = more boxes shown.",
+        ge=0.0,
+        le=1.0,
+    )
 
 
 class OCRResponse(BaseModel):
@@ -214,13 +225,21 @@ async def ocr_pdf(request: OCRRequest):
             status_code=400,
             detail="tableMode must be 'accurate' or 'fast'",
         )
+    if request.layoutModel not in ["docling", "ibm"]:
+        raise HTTPException(
+            status_code=400,
+            detail="layoutModel must be 'docling' or 'ibm'",
+        )
 
     # Create temp directory
     temp_dir = Path(tempfile.mkdtemp(prefix="pdf-parser-ocr-"))
 
     try:
         t0 = time.time()
-        logger.info("🔍 OCR request: %s → %s", request.inputPath, request.outputPath)
+        logger.info(
+            "OCR request [layoutModel=%s]: %s → %s",
+            request.layoutModel, request.inputPath, request.outputPath,
+        )
 
         # Initialize handlers
         s3 = S3Handler()
@@ -235,55 +254,105 @@ async def ocr_pdf(request: OCRRequest):
         local_output.mkdir(parents=True, exist_ok=True)
 
         # 1) Download PDF from S3
-        logger.info("📥 [%s] Downloading from S3", pdf_name)
+        logger.info("[%s] Downloading from S3", pdf_name)
         s3.download_pdf(request.inputPath, local_pdf)
 
-        # 2) Docling conversion (OCR only)
-        logger.info("📄 [%s] Docling OCR conversion started (accelerator=%s)", pdf_name, request.useAccelerator)
-        converter = DoclingConverter(table_mode=request.tableMode, use_accelerator=request.useAccelerator)
-        parsed = converter.convert(local_pdf)
-        n_pages = len(parsed.doc.pages)
-        n_figs = len(parsed.get_figures())
-        n_tbls = len(parsed.get_tables())
-        logger.info(
-            "✅ [%s] OCR done — %d pages, %d figures, %d tables",
-            pdf_name, n_pages, n_figs, n_tbls,
-        )
-
-        # 3) Save text markdown
-        logger.info("💾 [%s] Saving text markdown", pdf_name)
-        text_path = local_output / f"{parsed.doc_name}_text.md"
-        text_path.write_text(parsed.doc.export_to_markdown(), encoding="utf-8")
-
-        # 4) Generate bbox visualization images
+        # 2) Conversion (Docling or IBM)
         bbox_uris = []
-        if request.generateBboxImages:
-            logger.info("🖼️  [%s] Generating bbox visualization images", pdf_name)
-            bbox_dir = local_output / "bbox"
-            bbox_dir.mkdir(parents=True, exist_ok=True)
 
-            bbox_images = generate_bbox_images(parsed, bbox_dir)
+        if request.layoutModel == "ibm":
+            # --- IBM LayoutPredictor 경로 ---
+            logger.info("[%s] IBM layout conversion started", pdf_name)
+            converter = IbmLayoutConverter()
+            parsed = converter.convert(local_pdf)
+            n_pages = parsed.get_page_count()
+            n_figs = len(parsed.get_figures())
+            n_tbls = len(parsed.get_tables())
+            logger.info(
+                "[%s] IBM layout done — %d pages, %d figures, %d tables",
+                pdf_name, n_pages, n_figs, n_tbls,
+            )
 
-            # Save bbox images locally
-            for page_no, jpg_bytes in bbox_images.items():
-                bbox_path = bbox_dir / f"{parsed.doc_name}_page{page_no:03d}_bbox.jpg"
-                bbox_path.write_bytes(jpg_bytes)
+            # 텍스트 마크다운 저장 (PyMuPDF 기반)
+            logger.info("[%s] Saving text markdown (fitz)", pdf_name)
+            text_path = local_output / f"{parsed.doc_name}_text.md"
+            text_path.write_text(parsed.export_text_markdown(), encoding="utf-8")
 
-            logger.info("✅ [%s] Generated %d bbox images", pdf_name, len(bbox_images))
+            # bbox 시각화 이미지 생성
+            if request.generateBboxImages:
+                threshold = request.ibmConfidenceThreshold if request.ibmConfidenceThreshold is not None else 0.3
+                logger.info("[%s] Generating IBM bbox images (threshold=%.2f)", pdf_name, threshold)
+                bbox_dir = local_output / "bbox"
+                bbox_dir.mkdir(parents=True, exist_ok=True)
 
-        # 5) Upload to S3
-        logger.info("📤 [%s] Uploading OCR results to S3", pdf_name)
+                bbox_images = parsed.generate_bbox_images(display_threshold=threshold)
+                for page_no, jpg_bytes in bbox_images.items():
+                    bbox_path = bbox_dir / f"{parsed.doc_name}_page{page_no:03d}_bbox.jpg"
+                    bbox_path.write_bytes(jpg_bytes)
+
+                logger.info("[%s] Generated %d IBM bbox images", pdf_name, len(bbox_images))
+
+            doc_name_str = parsed.doc_name
+            stats_extra = {
+                "layoutModel": "ibm",
+                "ibmConfidenceThreshold": request.ibmConfidenceThreshold,
+            }
+
+        else:
+            # --- Docling 경로 (기존) ---
+            logger.info(
+                "[%s] Docling OCR conversion started (accelerator=%s)",
+                pdf_name, request.useAccelerator,
+            )
+            converter = DoclingConverter(
+                table_mode=request.tableMode, use_accelerator=request.useAccelerator
+            )
+            parsed = converter.convert(local_pdf)
+            n_pages = len(parsed.doc.pages)
+            n_figs = len(parsed.get_figures())
+            n_tbls = len(parsed.get_tables())
+            logger.info(
+                "[%s] Docling OCR done — %d pages, %d figures, %d tables",
+                pdf_name, n_pages, n_figs, n_tbls,
+            )
+
+            # 텍스트 마크다운 저장 (Docling 기반)
+            logger.info("[%s] Saving text markdown (Docling)", pdf_name)
+            text_path = local_output / f"{parsed.doc_name}_text.md"
+            text_path.write_text(parsed.doc.export_to_markdown(), encoding="utf-8")
+
+            # bbox 시각화 이미지 생성
+            if request.generateBboxImages:
+                logger.info("[%s] Generating Docling bbox images", pdf_name)
+                bbox_dir = local_output / "bbox"
+                bbox_dir.mkdir(parents=True, exist_ok=True)
+
+                bbox_images = generate_bbox_images(parsed, bbox_dir)
+                for page_no, jpg_bytes in bbox_images.items():
+                    bbox_path = bbox_dir / f"{parsed.doc_name}_page{page_no:03d}_bbox.jpg"
+                    bbox_path.write_bytes(jpg_bytes)
+
+                logger.info("[%s] Generated %d Docling bbox images", pdf_name, len(bbox_images))
+
+            doc_name_str = parsed.doc_name
+            stats_extra = {
+                "layoutModel": "docling",
+                "acceleratorUsed": request.useAccelerator,
+                "tableMode": request.tableMode,
+            }
+
+        # 3) Upload to S3
+        logger.info("[%s] Uploading OCR results to S3", pdf_name)
         s3_output_uri = request.outputPath.rstrip("/") + f"/{pdf_stem}/"
         uploaded_uris = s3.upload_directory(local_output, s3_output_uri)
 
-        text_md_s3_uri = s3_output_uri + f"{parsed.doc_name}_text.md"
+        text_md_s3_uri = s3_output_uri + f"{doc_name_str}_text.md"
 
-        # Filter bbox image URIs
         if request.generateBboxImages:
             bbox_uris = [uri for uri in uploaded_uris if "/bbox/" in uri]
 
         elapsed = time.time() - t0
-        logger.info("🎉 [%s] OCR done → %s (%.1fs total)", pdf_name, text_md_s3_uri, elapsed)
+        logger.info("[%s] OCR done → %s (%.1fs total)", pdf_name, text_md_s3_uri, elapsed)
 
         return OCRResponse(
             success=True,
@@ -296,8 +365,7 @@ async def ocr_pdf(request: OCRRequest):
                 "figures": n_figs,
                 "tables": n_tbls,
                 "bboxImages": len(bbox_uris) if bbox_uris else 0,
-                "acceleratorUsed": request.useAccelerator,
-                "tableMode": request.tableMode,
+                **stats_extra,
             },
             elapsedSeconds=round(elapsed, 2),
         )

@@ -1,0 +1,21 @@
+INFO:     Uvicorn running on http://0.0.0.0:3000 (Press CTRL+C to quit)
+INFO:     Started parent process [270559]
+INFO:     Started server process [270561]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Started server process [270562]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Shutting down
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [270561]
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [270562]
+INFO:     Received SIGTERM, exiting.
+INFO:     Received SIGTERM, exiting.
+INFO:     Waiting for child process [270561]
+INFO:     Waiting for child process [270562]
+INFO:     Stopping parent process [270559]
