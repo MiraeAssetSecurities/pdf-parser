@@ -22,7 +22,7 @@ import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-from src.s3_handler import S3Handler
+from pdf_parser.s3_handler import S3Handler
 
 logger = logging.getLogger("pdf_parser.s3")
 
@@ -63,9 +63,9 @@ def process_single_s3(
         (final_md_s3_uri, list_of_uploaded_s3_uris)
     """
     _setup_logging(verbose)
-    from src.converter import DoclingConverter
-    from src.summarizer import BedrockSummarizer
-    from src.markdown_builder import MarkdownBuilder
+    from pdf_parser.converter import DoclingConverter
+    from pdf_parser.summarizer import BedrockSummarizer
+    from pdf_parser.markdown_builder import MarkdownBuilder
 
     s3 = S3Handler()
 

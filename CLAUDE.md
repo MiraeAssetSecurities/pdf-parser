@@ -481,9 +481,9 @@ LLM-classified via prompt:
 
 ### Local Processing
 ```python
-from src.converter import DoclingConverter
-from src.summarizer import BedrockSummarizer
-from src.markdown_builder import MarkdownBuilder
+from pdf_parser.converter import DoclingConverter
+from pdf_parser.summarizer import BedrockSummarizer
+from pdf_parser.markdown_builder import MarkdownBuilder
 from pathlib import Path
 
 converter = DoclingConverter(table_mode="accurate")
@@ -557,7 +557,7 @@ print(f"Status: {health['status']}")
 
 ### S3 Integration
 ```python
-from src.s3_handler import S3Handler
+from pdf_parser.s3_handler import S3Handler
 from pathlib import Path
 
 s3 = S3Handler(region_name="us-east-1")
@@ -589,7 +589,7 @@ content = s3.read_markdown("s3://bucket/output/sample/sample_final.md")
 
 ### S3 Browser Widget (JupyterLab only)
 ```python
-from src.s3_browser import create_s3_browser
+from pdf_parser.s3_browser import create_s3_browser
 
 # Create interactive S3 file browser
 browser = create_s3_browser(initial_path="s3://my-bucket/pdfs/")

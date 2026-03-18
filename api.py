@@ -82,6 +82,16 @@ class ProcessRequest(BaseModel):
         default=False,
         description="[PDF only] Enable CPU accelerator for faster processing (num_threads=4)",
     )
+    layoutModel: Optional[str] = Field(
+        default="docling",
+        description="[PDF only] Layout detection model: 'docling' or 'ibm'",
+    )
+    ibmConfidenceThreshold: Optional[float] = Field(
+        default=0.3,
+        description="[IBM only] Minimum confidence for layout detection (0.0~1.0)",
+        ge=0.0,
+        le=1.0,
+    )
     outputFormat: Optional[str] = Field(
         default="markdown",
         description="[Office only] Output format: 'markdown', 'html', or 'text'",
@@ -192,6 +202,212 @@ class OfficeProcessResponse(BaseModel):
     uploadedFiles: Optional[list[str]] = None
     stats: Optional[dict] = None
     elapsedSeconds: Optional[float] = None
+
+
+# ---------------------------------------------------------------------------
+# IBM OCR 파이프라인 헬퍼 함수
+# ---------------------------------------------------------------------------
+
+def _crop_ibm_region(ibm_parsed, item: dict):
+    """IBM 예측 결과(dict)의 bbox로 해당 페이지 이미지를 크롭."""
+    page_no = item["page_no"]
+    if page_no < 1 or page_no > len(ibm_parsed.page_images):
+        return None
+    img = ibm_parsed.page_images[page_no - 1]
+    l, t, r, b = int(item["l"]), int(item["t"]), int(item["r"]), int(item["b"])
+    l, t = max(0, l), max(0, t)
+    r, b = min(img.width, r), min(img.height, b)
+    if r <= l or b <= t:
+        return None
+    return img.crop((l, t, r, b))
+
+
+def _save_ibm_assets(ibm_parsed, output_dir: Path):
+    """IBM figure/table bbox 크롭 이미지를 output_dir에 저장."""
+    from concurrent.futures import ThreadPoolExecutor
+    fig_dir = output_dir / "pictures" / "ibm_figure"
+    tbl_img_dir = output_dir / "table" / "img"
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    tbl_img_dir.mkdir(parents=True, exist_ok=True)
+
+    for i, fig in enumerate(ibm_parsed.get_figures(), start=1):
+        img = _crop_ibm_region(ibm_parsed, fig)
+        if img:
+            img.save(fig_dir / f"{ibm_parsed.doc_name}_picture_{i}.png", "PNG")
+
+    for i, tbl in enumerate(ibm_parsed.get_tables(), start=1):
+        img = _crop_ibm_region(ibm_parsed, tbl)
+        if img:
+            img.save(tbl_img_dir / f"{ibm_parsed.doc_name}_table_{i}.png", "PNG")
+
+
+def _summarize_pages_ibm(ibm_parsed, summarizer) -> dict:
+    """IBM page_images로 페이지별 요약 생성."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from pdf_parser.summarizer import SUMMARY_PROMPT
+
+    results: dict = {}
+    total = ibm_parsed.get_page_count()
+
+    def _work(page_no, pil_image):
+        return page_no, summarizer._call_vision(pil_image, SUMMARY_PROMPT)
+
+    with ThreadPoolExecutor(max_workers=min(total, 10)) as ex:
+        futs = {
+            ex.submit(_work, i + 1, img): i + 1
+            for i, img in enumerate(ibm_parsed.page_images)
+        }
+        for f in as_completed(futs):
+            pn = futs[f]
+            try:
+                page_no, res = f.result()
+                results[page_no] = res
+            except Exception as e:
+                results[pn] = {"summary": f"Summary generation failed: {e}", "entities": []}
+    return results
+
+
+def _summarize_figures_ibm(ibm_parsed, summarizer, page_summaries: dict) -> dict:
+    """IBM figure bbox 크롭 이미지로 figure별 요약 생성 (1-based index)."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from pdf_parser.summarizer import SUMMARY_PROMPT
+
+    figures = ibm_parsed.get_figures()
+    results: dict = {}
+
+    def _work(idx, item):
+        img = _crop_ibm_region(ibm_parsed, item)
+        if img is None:
+            return idx, {"summary": "No image", "entities": []}
+        page_no = item["page_no"]
+        ctx_info = page_summaries.get(page_no, {})
+        ctx = f"\n\n[Page {page_no} context] {ctx_info.get('summary', '')}" if ctx_info.get("summary") else ""
+        return idx, summarizer._call_vision(img, SUMMARY_PROMPT + ctx)
+
+    with ThreadPoolExecutor(max_workers=min(len(figures) or 1, 10)) as ex:
+        futs = {ex.submit(_work, i + 1, item): i + 1 for i, item in enumerate(figures)}
+        for f in as_completed(futs):
+            idx = futs[f]
+            try:
+                i, res = f.result()
+                results[i] = res
+            except Exception as e:
+                results[idx] = {"summary": f"Summary generation failed: {e}", "entities": []}
+    return results
+
+
+def _summarize_tables_ibm(ibm_parsed, summarizer, page_summaries: dict) -> dict:
+    """IBM table bbox 크롭 이미지로 table별 요약 생성 (1-based index)."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from pdf_parser.summarizer import TABLE_SUMMARY_PROMPT
+
+    tables = ibm_parsed.get_tables()
+    results: dict = {}
+
+    def _work(idx, item):
+        img = _crop_ibm_region(ibm_parsed, item)
+        if img is None:
+            return idx, {"summary": "No image", "entities": [], "category": "other"}
+        page_no = item["page_no"]
+        ctx_info = page_summaries.get(page_no, {})
+        ctx = f"\n\n[Page {page_no} context] {ctx_info.get('summary', '')}" if ctx_info.get("summary") else ""
+        return idx, summarizer._call_vision(img, TABLE_SUMMARY_PROMPT + ctx)
+
+    with ThreadPoolExecutor(max_workers=min(len(tables) or 1, 10)) as ex:
+        futs = {ex.submit(_work, i + 1, item): i + 1 for i, item in enumerate(tables)}
+        for f in as_completed(futs):
+            idx = futs[f]
+            try:
+                i, res = f.result()
+                results[i] = res
+            except Exception as e:
+                results[idx] = {"summary": f"Summary generation failed: {e}", "entities": [], "category": "other"}
+    return results
+
+
+def _html_row(key: str, value: str) -> str:
+    return f"  <tr>\n    <td>{key}</td>\n    <td>{value}</td>\n  </tr>\n"
+
+
+def _build_ibm_markdown(
+    ibm_parsed,
+    output_dir: Path,
+    page_summaries: dict,
+    figure_summaries: dict,
+    table_summaries: dict,
+) -> str:
+    """IBM 파이프라인 결과를 최종 마크다운으로 조립."""
+    doc_name = ibm_parsed.doc_name
+    figures = ibm_parsed.get_figures()
+    tables = ibm_parsed.get_tables()
+
+    # page_no → [(1-based_idx, item)] 매핑
+    fig_by_page: dict = {}
+    for i, fig in enumerate(figures, start=1):
+        fig_by_page.setdefault(fig["page_no"], []).append((i, fig))
+
+    tbl_by_page: dict = {}
+    for i, tbl in enumerate(tables, start=1):
+        tbl_by_page.setdefault(tbl["page_no"], []).append((i, tbl))
+
+    parts = []
+    for page_no, page_text in enumerate(ibm_parsed.page_texts, start=1):
+        page_info = page_summaries.get(page_no, {"summary": "", "entities": []})
+        page_meta = (
+            '<table class="page-meta">\n'
+            + _html_row("page_number", str(page_no))
+            + _html_row("page_summary", page_info.get("summary", ""))
+            + _html_row("entities", ", ".join(page_info.get("entities", [])))
+            + "</table>\n"
+        )
+
+        fig_blocks = []
+        for idx, fig in fig_by_page.get(page_no, []):
+            info = figure_summaries.get(idx, {"summary": "", "entities": []})
+            img_path = output_dir / "pictures" / "ibm_figure" / f"{doc_name}_picture_{idx}.png"
+            img_rel = str(img_path.relative_to(output_dir)) if img_path.exists() else ""
+            bbox_str = f'l={fig["l"]:.1f} t={fig["t"]:.1f} r={fig["r"]:.1f} b={fig["b"]:.1f}'
+            fig_meta = (
+                '<table class="figure-meta">\n'
+                + _html_row("image_id", f"figure-{idx:03d}")
+                + _html_row("category", fig.get("label", "Picture"))
+                + _html_row("page_number", str(page_no))
+                + _html_row("confidence", f"{fig.get('confidence', 0):.2f}")
+                + _html_row("image_summary", info.get("summary", ""))
+                + _html_row("entities", ", ".join(info.get("entities", [])))
+                + _html_row("bbox", bbox_str)
+                + _html_row("img_source", img_rel)
+                + "</table>\n"
+            )
+            img_md = f"![figure-{idx:03d}]({img_rel})" if img_rel else ""
+            fig_blocks.append(f"{fig_meta}\n{img_md}")
+
+        tbl_blocks = []
+        for idx, tbl in tbl_by_page.get(page_no, []):
+            info = table_summaries.get(idx, {"summary": "", "entities": [], "category": "other"})
+            img_path = output_dir / "table" / "img" / f"{doc_name}_table_{idx}.png"
+            img_rel = str(img_path.relative_to(output_dir)) if img_path.exists() else ""
+            bbox_str = f'l={tbl["l"]:.1f} t={tbl["t"]:.1f} r={tbl["r"]:.1f} b={tbl["b"]:.1f}'
+            tbl_meta = (
+                '<table class="table-meta">\n'
+                + _html_row("table_id", f"table-{idx:03d}")
+                + _html_row("category", info.get("category", "other"))
+                + _html_row("page_number", str(page_no))
+                + _html_row("confidence", f"{tbl.get('confidence', 0):.2f}")
+                + _html_row("table_summary", info.get("summary", ""))
+                + _html_row("entities", ", ".join(info.get("entities", [])))
+                + _html_row("bbox", bbox_str)
+                + _html_row("img_source", img_rel)
+                + "</table>\n"
+            )
+            img_md = f"![table-{idx:03d}]({img_rel})" if img_rel else ""
+            tbl_blocks.append(f"{tbl_meta}\n{img_md}")
+
+        elements = [page_meta, page_text.strip()] + fig_blocks + tbl_blocks
+        page_content = "\n\n".join(e for e in elements if e.strip())
+        parts.append(f"<page-{page_no:03d}>\n{page_content}\n</page-{page_no:03d}>")
+
+    return "\n\n".join(parts)
 
 
 @app.post("/ocr", response_model=OCRResponse)
@@ -431,6 +647,11 @@ async def process_pdf(request: ProcessRequest):
             status_code=400,
             detail="tableMode must be 'accurate' or 'fast'",
         )
+    if (request.layoutModel or "docling") not in ["docling", "ibm"]:
+        raise HTTPException(
+            status_code=400,
+            detail="layoutModel must be 'docling' or 'ibm'",
+        )
 
     # Create temp directory
     temp_dir = Path(tempfile.mkdtemp(prefix="pdf-parser-"))
@@ -455,54 +676,101 @@ async def process_pdf(request: ProcessRequest):
         logger.info("📥 [%s] Downloading from S3", pdf_name)
         s3.download_pdf(request.inputPath, local_pdf)
 
-        # 2) Docling conversion
-        logger.info("📄 [%s] Docling conversion started (accelerator=%s)", pdf_name, request.useAccelerator)
-        converter = DoclingConverter(table_mode=request.tableMode, use_accelerator=request.useAccelerator)
-        parsed = converter.convert(local_pdf)
-        n_pages = len(parsed.doc.pages)
-        n_figs = len(parsed.get_figures())
-        n_tbls = len(parsed.get_tables())
-        logger.info(
-            "✅ [%s] Conversion done — %d pages, %d figures, %d tables",
-            pdf_name, n_pages, n_figs, n_tbls,
-        )
+        layout_model = request.layoutModel or "docling"
 
-        # 3) Save assets locally
-        logger.info("💾 [%s] Saving assets locally", pdf_name)
-        parsed.save_assets(local_output)
+        if layout_model == "ibm":
+            # ── IBM LayoutPredictor 경로 ──────────────────────────────────
+            threshold = request.ibmConfidenceThreshold if request.ibmConfidenceThreshold is not None else 0.3
+            logger.info("📄 [%s] IBM layout conversion started (threshold=%.2f)", pdf_name, threshold)
+            ibm_converter = IbmLayoutConverter(base_threshold=threshold)
+            ibm_parsed = ibm_converter.convert(local_pdf)
+            n_pages = ibm_parsed.get_page_count()
+            n_figs = len(ibm_parsed.get_figures())
+            n_tbls = len(ibm_parsed.get_tables())
+            logger.info(
+                "✅ [%s] IBM conversion done — %d pages, %d figures, %d tables",
+                pdf_name, n_pages, n_figs, n_tbls,
+            )
 
-        # Save text markdown
-        text_path = local_output / f"{parsed.doc_name}_text.md"
-        text_path.write_text(parsed.doc.export_to_markdown(), encoding="utf-8")
+            # 에셋 저장 (bbox 크롭 이미지)
+            logger.info("💾 [%s] Saving IBM assets", pdf_name)
+            _save_ibm_assets(ibm_parsed, local_output)
 
-        # 4) LLM summaries
-        page_summaries, image_summaries, table_summaries = {}, {}, {}
-        if not request.noSummary:
-            summarizer = BedrockSummarizer(model_id=request.modelId)
+            # 텍스트 마크다운 저장
+            text_path = local_output / f"{ibm_parsed.doc_name}_text.md"
+            text_path.write_text(ibm_parsed.export_text_markdown(), encoding="utf-8")
 
-            logger.info("🔍 [%s] Summarizing pages... (%d)", pdf_name, n_pages)
-            page_summaries = summarizer.summarize_pages(parsed)
+            # LLM 요약
+            page_summaries, image_summaries, table_summaries = {}, {}, {}
+            if not request.noSummary:
+                summarizer = BedrockSummarizer(model_id=request.modelId)
 
-            logger.info("🖼️  [%s] Summarizing figures... (%d)", pdf_name, n_figs)
-            image_summaries = summarizer.summarize_figures(parsed, page_summaries)
+                logger.info("🔍 [%s] Summarizing pages (IBM)... (%d)", pdf_name, n_pages)
+                page_summaries = _summarize_pages_ibm(ibm_parsed, summarizer)
 
-            logger.info("📊 [%s] Summarizing tables... (%d)", pdf_name, n_tbls)
-            table_summaries = summarizer.summarize_tables(parsed, page_summaries)
+                logger.info("🖼️  [%s] Summarizing figures (IBM)... (%d)", pdf_name, n_figs)
+                image_summaries = _summarize_figures_ibm(ibm_parsed, summarizer, page_summaries)
 
-        # 5) Build final markdown
-        logger.info("📝 [%s] Building final markdown", pdf_name)
-        builder = MarkdownBuilder(parsed, local_output)
-        final_md = builder.build(page_summaries, image_summaries, table_summaries)
+                logger.info("📊 [%s] Summarizing tables (IBM)... (%d)", pdf_name, n_tbls)
+                table_summaries = _summarize_tables_ibm(ibm_parsed, summarizer, page_summaries)
 
-        final_md_path = local_output / f"{parsed.doc_name}_final.md"
+            # 최종 마크다운 빌드
+            logger.info("📝 [%s] Building IBM final markdown", pdf_name)
+            final_md = _build_ibm_markdown(ibm_parsed, local_output, page_summaries, image_summaries, table_summaries)
+            doc_name_str = ibm_parsed.doc_name
+            stats_extra = {"layoutModel": "ibm", "ibmConfidenceThreshold": threshold}
+
+        else:
+            # ── Docling 기존 경로 ─────────────────────────────────────────
+            logger.info("📄 [%s] Docling conversion started (accelerator=%s)", pdf_name, request.useAccelerator)
+            converter = DoclingConverter(table_mode=request.tableMode, use_accelerator=request.useAccelerator)
+            parsed = converter.convert(local_pdf)
+            n_pages = len(parsed.doc.pages)
+            n_figs = len(parsed.get_figures())
+            n_tbls = len(parsed.get_tables())
+            logger.info(
+                "✅ [%s] Conversion done — %d pages, %d figures, %d tables",
+                pdf_name, n_pages, n_figs, n_tbls,
+            )
+
+            logger.info("💾 [%s] Saving assets locally", pdf_name)
+            parsed.save_assets(local_output)
+
+            text_path = local_output / f"{parsed.doc_name}_text.md"
+            text_path.write_text(parsed.doc.export_to_markdown(), encoding="utf-8")
+
+            page_summaries, image_summaries, table_summaries = {}, {}, {}
+            if not request.noSummary:
+                summarizer = BedrockSummarizer(model_id=request.modelId)
+
+                logger.info("🔍 [%s] Summarizing pages... (%d)", pdf_name, n_pages)
+                page_summaries = summarizer.summarize_pages(parsed)
+
+                logger.info("🖼️  [%s] Summarizing figures... (%d)", pdf_name, n_figs)
+                image_summaries = summarizer.summarize_figures(parsed, page_summaries)
+
+                logger.info("📊 [%s] Summarizing tables... (%d)", pdf_name, n_tbls)
+                table_summaries = summarizer.summarize_tables(parsed, page_summaries)
+
+            logger.info("📝 [%s] Building final markdown", pdf_name)
+            builder = MarkdownBuilder(parsed, local_output)
+            final_md = builder.build(page_summaries, image_summaries, table_summaries)
+            doc_name_str = parsed.doc_name
+            stats_extra = {
+                "layoutModel": "docling",
+                "acceleratorUsed": request.useAccelerator,
+                "tableMode": request.tableMode,
+            }
+
+        final_md_path = local_output / f"{doc_name_str}_final.md"
         final_md_path.write_text(final_md, encoding="utf-8")
 
-        # 6) Upload to S3
+        # Upload to S3
         logger.info("📤 [%s] Uploading results to S3", pdf_name)
         s3_output_uri = request.outputPath.rstrip("/") + f"/{pdf_stem}/"
         uploaded_uris = s3.upload_directory(local_output, s3_output_uri)
 
-        final_md_s3_uri = s3_output_uri + f"{parsed.doc_name}_final.md"
+        final_md_s3_uri = s3_output_uri + f"{doc_name_str}_final.md"
 
         elapsed = time.time() - t0
         logger.info("🎉 [%s] Done → %s (%.1fs total)", pdf_name, final_md_s3_uri, elapsed)
@@ -517,8 +785,7 @@ async def process_pdf(request: ProcessRequest):
                 "figures": n_figs,
                 "tables": n_tbls,
                 "summariesGenerated": not request.noSummary,
-                "acceleratorUsed": request.useAccelerator,
-                "tableMode": request.tableMode,
+                **stats_extra,
             },
             elapsedSeconds=round(elapsed, 2),
         )
