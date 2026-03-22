@@ -66,7 +66,7 @@ class ProcessRequest(BaseModel):
         description="S3 URI of output base path (e.g., s3://bucket/output/)",
         example="s3://my-bucket/output/",
     )
-    modelId: Optional[str] = Field(
+    llmModelId: Optional[str] = Field(
         default="ap-northeast-2.anthropic.claude-haiku-4-5-20251001-v1:0",
         description="Bedrock model ID for AI summaries",
     )
@@ -82,7 +82,7 @@ class ProcessRequest(BaseModel):
         default=False,
         description="[PDF only] Enable CPU accelerator for faster processing (num_threads=4)",
     )
-    layoutModel: Optional[str] = Field(
+    modelId: Optional[str] = Field(
         default="docling",
         description="[PDF only] Layout detection model: 'docling' or 'ibm'",
     )
@@ -138,7 +138,7 @@ class OCRRequest(BaseModel):
         default=False,
         description="Enable CPU accelerator for faster processing (num_threads=4)",
     )
-    layoutModel: Optional[str] = Field(
+    modelId: Optional[str] = Field(
         default="docling",
         description="Layout detection model: 'docling' (full Docling pipeline) or 'ibm' (IBM LayoutPredictor direct)",
     )
@@ -175,7 +175,7 @@ class OfficeProcessRequest(BaseModel):
         description="S3 URI of output base path (e.g., s3://bucket/output/)",
         example="s3://my-bucket/output/",
     )
-    modelId: Optional[str] = Field(
+    llmModelId: Optional[str] = Field(
         default="ap-northeast-2.anthropic.claude-haiku-4-5-20251001-v1:0",
         description="Bedrock model ID for AI summaries",
     )
@@ -441,10 +441,10 @@ async def ocr_pdf(request: OCRRequest):
             status_code=400,
             detail="tableMode must be 'accurate' or 'fast'",
         )
-    if request.layoutModel not in ["docling", "ibm"]:
+    if request.modelId not in ["docling", "ibm"]:
         raise HTTPException(
             status_code=400,
-            detail="layoutModel must be 'docling' or 'ibm'",
+            detail="modelId must be 'docling' or 'ibm'",
         )
 
     # Create temp directory
@@ -453,8 +453,8 @@ async def ocr_pdf(request: OCRRequest):
     try:
         t0 = time.time()
         logger.info(
-            "OCR request [layoutModel=%s]: %s → %s",
-            request.layoutModel, request.inputPath, request.outputPath,
+            "OCR request [modelId=%s]: %s → %s",
+            request.modelId, request.inputPath, request.outputPath,
         )
 
         # Initialize handlers
@@ -476,7 +476,7 @@ async def ocr_pdf(request: OCRRequest):
         # 2) Conversion (Docling or IBM)
         bbox_uris = []
 
-        if request.layoutModel == "ibm":
+        if request.modelId == "ibm":
             # --- IBM LayoutPredictor 경로 ---
             logger.info("[%s] IBM layout conversion started", pdf_name)
             converter = IbmLayoutConverter()
@@ -496,7 +496,7 @@ async def ocr_pdf(request: OCRRequest):
 
             # bbox 시각화 이미지 생성
             if request.generateBboxImages:
-                threshold = request.ibmConfidenceThreshold if request.ibmConfidenceThreshold is not None else 0.3
+                threshold = request.ibmConfidenceThreshold
                 logger.info("[%s] Generating IBM bbox images (threshold=%.2f)", pdf_name, threshold)
                 bbox_dir = local_output / "bbox"
                 bbox_dir.mkdir(parents=True, exist_ok=True)
@@ -647,10 +647,10 @@ async def process_pdf(request: ProcessRequest):
             status_code=400,
             detail="tableMode must be 'accurate' or 'fast'",
         )
-    if (request.layoutModel or "docling") not in ["docling", "ibm"]:
+    if (request.modelId or "docling") not in ["docling", "ibm"]:
         raise HTTPException(
             status_code=400,
-            detail="layoutModel must be 'docling' or 'ibm'",
+            detail="modelId must be 'docling' or 'ibm'",
         )
 
     # Create temp directory
@@ -676,11 +676,11 @@ async def process_pdf(request: ProcessRequest):
         logger.info("📥 [%s] Downloading from S3", pdf_name)
         s3.download_pdf(request.inputPath, local_pdf)
 
-        layout_model = request.layoutModel or "docling"
+        layout_model = request.modelId or "docling"
 
         if layout_model == "ibm":
             # ── IBM LayoutPredictor 경로 ──────────────────────────────────
-            threshold = request.ibmConfidenceThreshold if request.ibmConfidenceThreshold is not None else 0.3
+            threshold = request.ibmConfidenceThreshold
             logger.info("📄 [%s] IBM layout conversion started (threshold=%.2f)", pdf_name, threshold)
             ibm_converter = IbmLayoutConverter(base_threshold=threshold)
             ibm_parsed = ibm_converter.convert(local_pdf)
@@ -703,7 +703,7 @@ async def process_pdf(request: ProcessRequest):
             # LLM 요약
             page_summaries, image_summaries, table_summaries = {}, {}, {}
             if not request.noSummary:
-                summarizer = BedrockSummarizer(model_id=request.modelId)
+                summarizer = BedrockSummarizer(model_id=request.llmModelId)
 
                 logger.info("🔍 [%s] Summarizing pages (IBM)... (%d)", pdf_name, n_pages)
                 page_summaries = _summarize_pages_ibm(ibm_parsed, summarizer)
@@ -741,7 +741,7 @@ async def process_pdf(request: ProcessRequest):
 
             page_summaries, image_summaries, table_summaries = {}, {}, {}
             if not request.noSummary:
-                summarizer = BedrockSummarizer(model_id=request.modelId)
+                summarizer = BedrockSummarizer(model_id=request.llmModelId)
 
                 logger.info("🔍 [%s] Summarizing pages... (%d)", pdf_name, n_pages)
                 page_summaries = summarizer.summarize_pages(parsed)
@@ -842,7 +842,7 @@ async def process_document(request: ProcessRequest):
         office_request = OfficeProcessRequest(
             inputPath=request.inputPath,
             outputPath=request.outputPath,
-            modelId=request.modelId,
+            llmModelId=request.llmModelId,
             noSummary=request.noSummary,
             outputFormat=request.outputFormat or "markdown",
             bedrockRegion=request.bedrockRegion or "ap-northeast-2",
@@ -921,7 +921,7 @@ async def process_office(request: OfficeProcessRequest):
         logger.info("📄 [%s] Office parsing started", file_name)
         config = OfficeParserConfig(
             summarize=not request.noSummary,
-            bedrock_model_id=request.modelId,
+            bedrock_model_id=request.llmModelId,
             bedrock_region=request.bedrockRegion,
         )
         ast = OfficeParser.parse_office(str(local_file), config)
