@@ -1,16 +1,44 @@
+# 환경 변수 / 시크릿
 .env
+.env.*
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+.Python
+
+# 출력 / 임시 파일
 output/
+output_opendataloader/
+dots_output/
 pdfs/
 docs/
 log/
+imgs/
 downloads/
 downloads_ocr/
 temp_bbox*/
-nohup.out
-pdf-parser-api.service
-.ipynb_checkpoints/
-__pycache__/
-*.pyc
-.DS_Store
-.venv/
 temp_img.jpg
+*.tmp
+*.log
+nohup.out
+
+# 배포 압축파일 (재생성 가능)
+*.zip
+*.tar.gz
+
+# Jupyter
+.ipynb_checkpoints/
+
+# 시스템
+.DS_Store
+Thumbs.db
+
+# 서비스 파일
+pdf-parser-api.service

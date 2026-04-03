@@ -23,8 +23,18 @@ dependencies = [
     # MCP server
     "fastmcp>=2.0.0",
     "python-dotenv>=1.2.2",
+    # OpenDataLoader PDF
+    "opendataloader-pdf[hybrid]>=0.1.0",
     # Jupyter
     "jupyterlab>=4.5.5",
     "ipykernel>=7.2.0",
     "ipywidgets",
+    "qwen-vl-utils>=0.0.14",
+    "gradio>=6.10.0",
+    "gradio-image-annotation>=0.5.0",
+    "openai>=2.29.0",
+    "transformers==4.56.1",
+    "modelscope>=1.35.1",
+    "accelerate>=1.13.0",
+    "cairosvg>=2.9.0",
 ]

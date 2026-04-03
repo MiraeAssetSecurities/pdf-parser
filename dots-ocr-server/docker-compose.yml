@@ -1,0 +1,20 @@
+services:
+  dots-ocr:
+    build: .
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    # CPU-only: no GPU resources needed
+    # Adjust memory/CPU limits as needed
+    deploy:
+      resources:
+        limits:
+          memory: 12G
+        reservations:
+          memory: 8G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s  # model loading takes time
