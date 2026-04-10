@@ -19,11 +19,11 @@ aws configure
 
 ```bash
 # 서비스 파일 복사
-sudo cp service/api.service.example /etc/systemd/system/api.service
+sudo cp service/api.service.example /etc/systemd/system/pdf-parser-api.service
 
 # 서비스 등록 및 시작
 sudo systemctl daemon-reload
-sudo systemctl enable --now api
+sudo systemctl enable --now pdf-parser-api
 ```
 
 ### 서비스 파일 내용 (`service/api.service.example`)
@@ -126,8 +126,12 @@ sudo systemctl status jupyter
 
 # ── 시작 / 중지 / 재시작 ──
 sudo systemctl start pdf-parser-api
-sudo systemctl stop appdf-parser-apii
+sudo systemctl stop pdf-parser-api
 sudo systemctl restart pdf-parser-api
+
+sudo systemctl start jupyter
+sudo systemctl stop jupyter
+sudo systemctl restart jupyter
 
 # ── 로그 확인 ──
 # 최근 로그

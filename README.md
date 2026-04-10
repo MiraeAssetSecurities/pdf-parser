@@ -24,7 +24,7 @@ RAG(Retrieval-Augmented Generation) 파이프라인에서 가장 중요한 첫�
 
 ### PDF 파서 (`pdf_parser/`)
 - **PDF 파싱**: [Docling](https://github.com/DS4SD/docling) 기반 고품질 PDF 변환
-- **OCR 엔진 선택**: Docling 기본 OCR 또는 IBM LayoutPredictor 기반 OCR 선택 가능
+- **OCR 엔진 선택**: Docling 기본 OCR 또는 IBM LayoutPredictor / DOTS OCR 기반 선택 가능
 - **요소 추출**: 텍스트, 테이블, 이미지 자동 분리 + 바운딩 박스 위치 정보
 - **이미지 분류**: DocumentFigureClassifier(EfficientNet-B0)로 16가지 카테고리 자동 분류
 - **AI 요약**: AWS Bedrock Claude로 페이지/이미지/테이블별 요약 + 엔티티 추출
@@ -43,6 +43,7 @@ RAG(Retrieval-Augmented Generation) 파이프라인에서 가장 중요한 첫�
 ### 공통
 - **자동 분기**: 파일 확장자에 따라 PDF / Office 파서 자동 선택
 - **일괄 처리**: 폴더 내 문서를 `ProcessPoolExecutor`로 병렬 파싱
+- **MCP 서버**: FastMCP 기반 MCP 서버 제공 (Claude Desktop, Kiro, Cursor 등 연동)
 - **로그 저장**: `log/` 디렉토리에 실행 시각별 `.log` 파일 자동 생성
 
 ## Docling vs IBM OCR 비교
@@ -74,11 +75,11 @@ PDF 파서는 두 가지 OCR 엔진을 지원합니다. 문서 유형과 요구�
 
 **Bbox 감지 결과 비교:**
 
-![Docling vs IBM OCR 비교](imgs/docling_ibm_ocr비교.png)
+![Docling vs IBM OCR 비교](imgs/docling_ibm_ocr비교.png)
 
-**추출 결과 비교:**1
+**추출 결과 비교:**
 
-![Docling vs IBM OCR 비교 2](imgs/docling_ibm_ocr비교2.png)
+![Docling vs IBM OCR 비교 2](imgs/docling_ibm_ocr비교2.png)
 
 ### OCR 엔진 선택 방법
 
@@ -96,8 +97,8 @@ curl -X POST http://localhost:3000/ocr \
 ```
 
 **노트북에서 비교:**
-- `ocr_mode_compare.ipynb`: Docling vs IBM 결과를 나란히 비교
-- `docling_ibm_ocr.ipynb`: IBM LayoutPredictor 단독 탐색
+- `notebooks/ocr_mode_compare.ipynb`: Docling vs IBM 결과를 나란히 비교
+- `notebooks/docling_ibm_ocr.ipynb`: IBM LayoutPredictor 단독 탐색
 
 ## 프로젝트 구조
 
@@ -122,17 +123,35 @@ doc-parser/
 │   ├── parser.py                 # OfficeParser (docx/pptx/xlsx/odt/rtf 파싱)
 │   ├── types.py                  # 데이터 타입 정의 (AST, Config, Node 등)
 │   └── worker.py                 # 단일 파일 파싱 워커
-├── service/                      # systemd 서비스 설정 예시
-│   ├── api.service.example       # FastAPI 서버 서비스
-│   └── jupyter.service.example   # JupyterLab 서비스
-├── pdf_parser_docling.ipynb      # PDF 파이프라인 탐색 노트북
-├── pdf_parser_api.ipynb          # FastAPI 테스트 노트북
-├── pdf_parser_ibm_api.ipynb      # IBM OCR API 테스트 노트북
-├── ocr_visualizer.ipynb          # OCR 전용 시각화 노트북
-├── ocr_mode_compare.ipynb        # Docling vs IBM OCR 비교 노트북
-├── docling_ibm_ocr.ipynb         # IBM OCR 탐색 노트북
-├── imgs/                         # README 이미지
-├── assets/                       # 비교 스크린샷 등 문서 자료
+├── dots.ocr/                     # DOTS OCR 엔진 (로컬 비전 LLM 기반 OCR)
+│   ├── dots_ocr/                 # 라이브러리 소스
+│   ├── weights/                  # 모델 가중치 (DotsMOCR)
+│   ├── demo/                     # 데모 스크립트
+│   └── docker/                   # Docker 배포 설정
+├── dots-ocr-server/              # DOTS OCR 독립 서버 (Docker)
+│   ├── Dockerfile
+│   ├── docker-compose.yml
+│   └── server.py
+├── dots_ocr_deploy/              # DOTS OCR 오프라인 배포 패키지
+│   ├── wheels/                   # 사전 빌드된 .whl 파일
+│   ├── utils/                    # 유틸리티 모듈
+│   ├── requirements.txt
+│   └── setup.sh
+├── notebooks/                    # Jupyter 노트북
+│   ├── pdf_parser_docling.ipynb  # PDF 파이프라인 탐색 및 테스트
+│   ├── pdf_parser_api.ipynb      # FastAPI 서버 테스트 및 S3 파일 브라우저
+│   ├── pdf_parser_ibm_api.ipynb  # IBM OCR 모드 API 테스트
+│   ├── ocr_visualizer.ipynb      # OCR 전용 바운딩 박스 시각화
+│   ├── ocr_mode_compare.ipynb    # Docling vs IBM OCR 결과 비교
+│   ├── docling_ibm_ocr.ipynb     # IBM LayoutPredictor 탐색
+│   ├── dots-ocr-cpu.ipynb        # DOTS OCR CPU 모드 탐색
+│   ├── dots_ocr_parser.ipynb     # DOTS OCR 파서 탐색
+│   └── OpenDataLoader.ipynb      # OpenDataLoader PDF 파이프라인 탐색
+├── service/                      # systemd 서비스 설정
+│   ├── api.service.example       # FastAPI 서버 서비스 예시
+│   └── jupyter.service.example   # JupyterLab 서비스 예시
+├── docs/                         # 샘플 문서 (PDF, docx, xlsx 등)
+├── imgs/                         # README 비교 이미지
 ├── pyproject.toml                # uv 프로젝트 설정
 ├── setting.md                    # 서버 배포/설정 가이드
 ├── CLAUDE.md                     # Claude Code 가이드
@@ -252,13 +271,16 @@ uv run jupyter lab --ip=0.0.0.0 --port=8000 --no-browser
 
 > JupyterLab systemd 서비스 배포 방법은 [setting.md](setting.md)를 참조하세요.
 
-**주요 노트북:**
+**주요 노트북 (`notebooks/`):**
 - **pdf_parser_docling.ipynb**: 핵심 파이프라인 탐색 및 테스트
 - **pdf_parser_api.ipynb**: FastAPI 서버 테스트 및 S3 파일 브라우저
 - **pdf_parser_ibm_api.ipynb**: IBM OCR 모드 API 테스트
 - **ocr_visualizer.ipynb**: OCR 전용 바운딩 박스 시각화
 - **ocr_mode_compare.ipynb**: Docling vs IBM OCR 결과 비교
 - **docling_ibm_ocr.ipynb**: IBM LayoutPredictor 탐색
+- **dots-ocr-cpu.ipynb**: DOTS OCR CPU 모드 탐색
+- **dots_ocr_parser.ipynb**: DOTS OCR 파서 탐색
+- **OpenDataLoader.ipynb**: OpenDataLoader PDF 파이프라인 탐색
 
 ### Python 코드에서 직접 사용
 
