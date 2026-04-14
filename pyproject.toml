@@ -37,4 +37,10 @@ dependencies = [
     "modelscope>=1.35.1",
     "accelerate>=1.13.0",
     "cairosvg>=2.9.0",
+    "jiwer>=4.0.0",
+    "editdistance>=0.8.1",
+    "datasets>=4.8.4",
+    "scikit-learn>=1.8.0",
+    "matplotlib>=3.10.8",
+    "seaborn>=0.13.2",
 ]

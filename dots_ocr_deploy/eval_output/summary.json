@@ -1,0 +1,12 @@
+{
+  "dataset": "funsd",
+  "n_pages": 20,
+  "cer": 1.0,
+  "wer": 1.0,
+  "ned": 1.0,
+  "precision": 0.0,
+  "recall": 0.0,
+  "f1": 0.0,
+  "mean_iou": null,
+  "category_accuracy": 0.0
+}
